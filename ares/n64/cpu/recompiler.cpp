@@ -31,34 +31,49 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
   }
 
   auto block = (Block*)allocator.acquire(sizeof(Block));
-  beginFunction(3);
+  beginFunction(3); // three arguments
 
   Thread thread;
   bool hasBranched = 0;
   while(true) {
     u32 instruction = bus.read<Word>(address, thread, "Ares Recompiler");
-    if(callInstructionPrologue) {
+    if(callInstructionPrologue) { // only for debugging: cpu.recompiler.callInstructionPrologue = tracer.instruction->enabled();
       mov32(reg(1), imm(instruction));
       call(&CPU::instructionPrologue);
     }
+    bool mayTouchR0 = checkIfTargetIsZeroRegister(instruction);
     bool branched = emitEXECUTE(instruction);
     if(unlikely(instruction == 0x1000'ffff  //beq 0,0,<pc>
              || instruction == (2 << 26 | vaddr >> 2 & 0x3ff'ffff))) {  //j <pc>
       //accelerate idle loops
-      mov32(reg(1), imm(64 * 2));
-      call(&CPU::step);
+      mov32(reg(1), imm(64 * 2)); 
+      call(&CPU::step); // generates a CPU::step(u32{128}) call
+      // Q: How does the code above detect an idle loop (a busy loop)?
+      // A: it checks if we branch back to current PC
+      // Q: How does step(128) "accelerate" the loop?
+      // A: "It effectively makes idle loops 128 times faster which will be enough to make them disappear from profiles" --Rasky
     }
-    call(&CPU::instructionEpilogue);
+
+    if (mayTouchR0) {
+      call(&CPU::instructionEpilogue);
+      //PROBLEM: CPU::branch state may change dynamically, must check it *in executed code*
+    } else {
+      call(&CPU::instructionEpilogueDontClearR0);
+    }
+
     vaddr += 4;
     address += 4;
+    // Q: what is the check "(address & 0xfc) == 0"? Page boundary?
     if(hasBranched || (address & 0xfc) == 0 || singleInstruction) break;  //block boundary
     hasBranched = branched;
-    testJumpEpilog();
+    testJumpEpilog(); // emits `if (CPU::instructionEpilogue() != 0) { goto epilogue; }`
+    // Q: does it really emit a CMP after every instruction?
+    // A: yes, confirmed by rasky on discord
   }
-  jumpEpilog();
+  jumpEpilog(); // emits `goto epilogue;`
 
   memory::jitprotect(false);
-  block->code = endFunction();
+  block->code = endFunction(); // actually generate binary code
 
 //print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
   return block;
@@ -579,6 +594,123 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   return 0;
 }
+
+auto CPU::Recompiler::checkIfTargetIsZeroRegister(u32 instruction) -> bool {
+  switch(instruction >> 26) {
+  //SPECIAL
+  case 0x00: {
+      switch (instruction & 0x3f) {
+      //MULT Rs,Rt
+      case 0x18: {
+        return 0; // placed in LO and HI
+      }
+
+      //MULTU Rs,Rt
+      case 0x19: {
+        return 0; // result placed in LO and HI
+      }
+
+      //DIV Rs,Rt
+      case 0x1a: {
+        return 0;
+      }
+
+      //DIVU Rs,Rt
+      case 0x1b: {
+        return 0;
+      }
+
+      //DMULT Rs,Rt
+      case 0x1c: {
+        return 0;
+      }
+
+      //DMULTU Rs,Rt
+      case 0x1d: {
+        return 0;
+      }
+
+      //DDIV Rs,Rt
+      case 0x1e: {
+        return 0;
+      }
+
+      //DDIVU Rs,Rt
+      case 0x1f: {
+        return 0;
+      }
+
+      //ADD Rd,Rs,Rt
+      case 0x20: {
+        return (Rdn == 0);
+      }
+
+      //ADDU Rd,Rs,Rt
+      case 0x21: {
+        return 1; // TODO uses reg(0)
+      }
+
+      //SUB Rd,Rs,Rt
+      case 0x22: {
+        return (Rdn == 0);
+      }
+
+      //SUBU Rd,Rs,Rt
+      case 0x23: {
+        return 1; //TODO uses reg(0)
+      }
+
+      //AND Rd,Rs,Rt
+      case 0x24: {
+        return (Rdn == 0); // TODO what is mem(Rd)?
+      }
+
+      //OR Rd,Rs,Rt
+      case 0x25: {
+        return (Rdn == 0); // TODO what is mem(Rd)?
+      }
+
+      //XOR Rd,Rs,Rt
+      case 0x26: {
+        return (Rdn == 0); // TODO what is mem(Rd)?
+      }
+
+      //NOR Rd,Rs,Rt
+      case 0x27: {
+        return 1; // TODO uses reg(0)
+      }
+
+      default: {
+        return 1;
+      }
+      break;
+      }
+  }
+
+  //ADDI Rt,Rs,i16
+  case 0x08: 
+  //ADDIU Rt,Rs,i16
+  case 0x09:
+  //SLTI Rt,Rs,i16
+  case 0x0a: 
+  //SLTIU Rt,Rs,i16
+  case 0x0b: 
+  //ANDI Rt,Rs,n16
+  case 0x0c: 
+  //ORI Rt,Rs,n16
+  case 0x0d: 
+  //XORI Rt,Rs,n16
+  case 0x0e: 
+  //LUI Rt,n16
+  case 0x0f: {
+    return (Rtn == 0);
+  }
+    default: { return 1; }
+  }
+
+  return 1;
+}
+
 
 auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   switch(instruction & 0x3f) {

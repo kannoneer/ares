@@ -162,6 +162,27 @@ auto CPU::instructionEpilogue() -> s32 {
   unreachable;
 }
 
+auto CPU::instructionEpilogueDontClearR0() -> s32 {
+  if constexpr(Accuracy::CPU::Recompiler) {
+    //simulates timings without performing actual icache loads
+    icache.step(ipu.pc, devirtualizeFast(ipu.pc));
+  }
+
+  // ipu.r[0].u64 = 0; we know it isn't needed
+
+  switch(branch.state) {
+  case Branch::Step: ipu.pc += 4; return 0;
+  case Branch::Take: ipu.pc += 4; branch.delaySlot(true); return 0;
+  case Branch::NotTaken: ipu.pc += 4; branch.delaySlot(false); return 0;
+  case Branch::DelaySlotTaken: ipu.pc = branch.pc; branch.reset(); return 1;
+  case Branch::DelaySlotNotTaken: ipu.pc += 4; branch.reset(); return 0;
+  case Branch::Exception: branch.reset(); return 1;
+  case Branch::Discard: ipu.pc += 8; branch.reset(); return 1;
+  }
+
+  unreachable;
+}
+
 auto CPU::power(bool reset) -> void {
   Thread::reset();
 
