@@ -9,6 +9,7 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
   return pool;
 }
 
+
 auto CPU::Recompiler::block(u32 vaddr, u32 address, bool singleInstruction) -> Block* {
   if(auto block = pool(address)->blocks[address >> 2 & 0x3f]) return block;
   auto block = emit(vaddr, address, singleInstruction);
@@ -23,6 +24,9 @@ auto CPU::Recompiler::fastFetchBlock(u32 address) -> Block* {
   return nullptr;
 }
 
+#define USE_NEW_RECOMPILER 1
+
+#if USE_NEW_RECOMPILER
 auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Block* {
   if(unlikely(allocator.available() < 1_MiB)) {
     print("CPU allocator flush\n");
@@ -78,6 +82,49 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 //print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
   return block;
 }
+#else
+auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Block* {
+  if(unlikely(allocator.available() < 1_MiB)) {
+    print("CPU allocator flush\n");
+    allocator.release();
+    reset();
+  }
+
+  auto block = (Block*)allocator.acquire(sizeof(Block));
+  beginFunction(3);
+
+  Thread thread;
+  bool hasBranched = 0;
+  while(true) {
+    u32 instruction = bus.read<Word>(address, thread, "Ares Recompiler");
+    if(callInstructionPrologue) {
+      mov32(reg(1), imm(instruction));
+      call(&CPU::instructionPrologue);
+    }
+    bool branched = emitEXECUTE(instruction);
+    if(unlikely(instruction == 0x1000'ffff  //beq 0,0,<pc>
+             || instruction == (2 << 26 | vaddr >> 2 & 0x3ff'ffff))) {  //j <pc>
+      //accelerate idle loops
+      mov32(reg(1), imm(64 * 2));
+      call(&CPU::step);
+    }
+    call(&CPU::instructionEpilogue);
+    vaddr += 4;
+    address += 4;
+    if(hasBranched || (address & 0xfc) == 0 || singleInstruction) break;  //block boundary
+    hasBranched = branched;
+    testJumpEpilog();
+  }
+  jumpEpilog();
+
+  memory::jitprotect(false);
+  block->code = endFunction();
+
+//print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
+  return block;
+}
+
+#endif
 
 #define Sa  (instruction >>  6 & 31)
 #define Rdn (instruction >> 11 & 31)

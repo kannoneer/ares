@@ -1,5 +1,8 @@
 #include <n64/n64.hpp>
+#include <nall/chrono.hpp>
 #include <nall/gdb/server.hpp>
+#include <nall/map.hpp>
+#include <nall/vector.hpp>
 
 namespace ares::Nintendo64 {
 
@@ -19,6 +22,48 @@ CPU cpu;
 #include "debugger.cpp"
 #include "serialization.cpp"
 #include "disassembler.cpp"
+
+#define BENCHMARK_RUNS (20'000'000)
+static struct {
+  nall::map<u64, nall::vector<u64>> times;
+  int run;
+  bool dumped;
+  void add(u64 took, u64 id) {
+    if (run < BENCHMARK_RUNS) {
+      auto vec = times.find(id);
+      if (!vec) {
+        times.insert(id, {});
+        vec = times.find(id);
+      }
+
+      vec->append(took);
+    }
+
+    if (run == BENCHMARK_RUNS && !dumped) {
+      print("dumping benchmark\n");
+      u64 minsum = 0;
+      u64 mintotal = 0;
+
+      for (auto pair : times) {
+        u64 sum = 0;
+        u64 shortest = 1e9;
+        for (size_t i=0;i<pair.value.size();i++) {
+          sum += pair.value[i];
+          shortest = min(shortest, pair.value[i]);
+        }
+        minsum += shortest;
+        mintotal++;
+        if (pair.value.size() > 2000) {
+          printf("[%lu]\t%lu\t(%.3f) ns (%lu samples)\n", pair.key, shortest, sum / (double)pair.value.size(), pair.value.size());
+        }
+      }
+
+      printf("Mean of minimums: %.3f ns (%lu samples)\n", minsum / (double)mintotal, mintotal);
+      dumped = true;
+    }
+    run++;
+  }
+} benchmark;
 
 auto CPU::load(Node::Object parent) -> void {
   node = parent->append<Node::Object>("CPU");
@@ -115,14 +160,18 @@ auto CPU::instruction() -> void {
     // As memory writes cause recompiler block invalidation, this shouldn't be detectable.
     if (auto address = devirtualizeFast(ipu.pc)) {
       if(auto block = recompiler.fastFetchBlock(address)) {
+        u64 start = nall::chrono::nanosecond();
         block->execute(*this);
+        benchmark.add(nall::chrono::nanosecond() - start, address);
         return;
       }
     }
 
     if (auto address = devirtualize(ipu.pc)) {
-      auto block = recompiler.block(ipu.pc, *address, GDB::server.hasBreakpoints());
-      block->execute(*this);
+        auto block = recompiler.block(ipu.pc, *address, GDB::server.hasBreakpoints());
+        u64 start = nall::chrono::nanosecond();
+        block->execute(*this);
+        benchmark.add(nall::chrono::nanosecond() - start, *address);
     }
   }
 
