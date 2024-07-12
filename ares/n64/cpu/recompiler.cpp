@@ -26,6 +26,16 @@ auto CPU::Recompiler::fastFetchBlock(u32 address) -> Block* {
 
 #define USE_NEW_RECOMPILER 1
 
+namespace {
+  enum class InterruptEffect{
+    None,
+    EnableInterrupts,
+    DisableInterrupts
+  };
+}
+
+InterruptEffect checkIfInstructionAffectsInterrupts(CPU &cpu, u32 instruction);
+
 #if USE_NEW_RECOMPILER
 auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Block* {
   if(unlikely(allocator.available() < 1_MiB)) {
@@ -45,6 +55,7 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
       mov32(reg(1), imm(instruction));
       call(&CPU::instructionPrologue);
     }
+    InterruptEffect effect = checkIfInstructionAffectsInterrupts(cpu, instruction);
     bool mayTouchR0 = checkIfTargetIsZeroRegister(instruction);
     bool branched = emitEXECUTE(instruction);
     if(unlikely(instruction == 0x1000'ffff  //beq 0,0,<pc>
@@ -62,6 +73,11 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
       //call(&CPU::instructionEpilogue);
       mov64(reg(0), imm(0));
     }
+    
+    // PROBLEM: CPU::branch state may change dynamically, must check it *in executed code*
+    // Question: Is there a case where we definitely know branch state doesn't need to be updated?
+    // The call itself is probably not an issue? It's a static branch and will be speculatively executed.
+    call(&CPU::instructionEpilogueDontClearR0);
 
     vaddr += 4;
     address += 4;
@@ -151,6 +167,38 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define i16 s16(instruction)
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
+
+InterruptEffect checkIfInstructionAffectsInterrupts(CPU& cpu, u32 instruction) {
+    // SCC
+    if ((instruction >> 26) == 0x10) {
+        // MTC0 Rt,Rd
+        if ((instruction >> 21 & 0x1f) == 0x04) {
+
+            u32 local_Rdn = (instruction >> 11 & 31);
+            u32 local_Rtn = (instruction >> 16 & 31);
+
+            //u32 Rdn_value = cpu.ipu.r[local_Rdn].u32 & 0x0f;
+            u32 Rt_value = cpu.ipu.r[local_Rtn].u32;
+            printf("MTC0 0x%x, 0x%x (Rtn = %u, Rdn = %u)\n", Rt_value, Rdn, local_Rtn, local_Rdn);
+            if (local_Rdn == 12) {
+                constexpr u32 C0_STATUS_IE = 0x00000001;
+                constexpr u32 C0_STATUS_EXL = 0x00000002;
+                constexpr u32 C0_STATUS_ERL = 0x00000004;
+
+                printf("  set COP0 to %u. Interrupts: %s\n", Rt_value, (Rt_value & C0_STATUS_IE) ? "on" : "off");
+                //PROBLEM: interrupt enable is done via C0_WRITE_STATUS(C0_STATUS() | (__interrupt_sr & C0_STATUS_IE))
+                // so it doesn't show up as an immediate!
+                // PROBLEM: interrupt disable is also dynamic (libdragon's interrupt.c)
+                //         uint32_t sr = C0_STATUS();
+                //         C0_WRITE_STATUS(sr & ~C0_STATUS_IE);
+            }
+            // lea(reg(1), Rt);
+            // mov32(reg(2), imm(Rdn));
+            // call(&CPU::MTC0); // (rt,rd) setControlRegister(rd, s32(rt.u32));
+        }
+    }
+    return InterruptEffect::None;
+}
 
 auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
   switch(instruction >> 26) {
