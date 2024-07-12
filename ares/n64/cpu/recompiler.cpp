@@ -59,10 +59,8 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
     }
 
     if (mayTouchR0) {
-      call(&CPU::instructionEpilogue);
-      //PROBLEM: CPU::branch state may change dynamically, must check it *in executed code*
-    } else {
-      call(&CPU::instructionEpilogueDontClearR0);
+      //call(&CPU::instructionEpilogue);
+      mov64(reg(0), imm(0));
     }
 
     vaddr += 4;
