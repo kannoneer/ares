@@ -204,6 +204,12 @@ auto CPU::Recompiler::isInstructionDestinationZeroRegister(u32 instruction) -> b
 
 auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
   #if USE_NEW_RECOMPILER
+  if (instruction == 0) {
+    printf("replacing instruction 0x%x with nop\n", instruction);
+    sljit_emit_op0(compiler, SLJIT_NOP);
+    return 0;
+  }
+
   if (isInstructionDestinationZeroRegister(instruction)) {
     printf("zero register destination in 0x%x\n", instruction);
     return 0;
