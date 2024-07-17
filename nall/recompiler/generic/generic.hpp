@@ -31,8 +31,20 @@ namespace nall::recompiler {
 
     auto endFunction() -> u8* {
       u8* code = (u8*)sljit_generate_code(compiler, 0, &allocator);
-      allocator.reserve(sljit_get_generated_code_size(compiler));
+      sljit_uw size = sljit_get_generated_code_size(compiler);
+      //printf("block 0x%p size %lu\n", code, size);
+      allocator.reserve(size);
       resetCompiler();
+
+      FILE* fp = fopen("results/size.csv", "a");
+      if (fp) {
+        fprintf(fp, "%lu,%lu\n", (uintptr_t)code, size); //TODO should use emulated address as key
+        fclose(fp);
+      } else {
+        printf("couldn't open csv\n");
+      }
+      //file_buffer fb("temp/sizes.csv", file_buffer::mode::append);
+      //string s;
       return code;
     }
 
