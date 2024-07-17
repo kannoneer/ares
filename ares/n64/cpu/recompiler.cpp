@@ -45,7 +45,6 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
       mov32(reg(1), imm(instruction));
       call(&CPU::instructionPrologue);
     }
-    bool mayTouchR0 = checkIfTargetIsZeroRegister(instruction);
     bool branched = emitEXECUTE(instruction);
     if(unlikely(instruction == 0x1000'ffff  //beq 0,0,<pc>
              || instruction == (2 << 26 | vaddr >> 2 & 0x3ff'ffff))) {  //j <pc>
@@ -58,12 +57,7 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
       // A: "It effectively makes idle loops 128 times faster which will be enough to make them disappear from profiles" --Rasky
     }
 
-    if (mayTouchR0) {
-      call(&CPU::instructionEpilogue);
-      //PROBLEM: CPU::branch state may change dynamically, must check it *in executed code*
-    } else {
-      call(&CPU::instructionEpilogueDontClearR0);
-    }
+    call(&CPU::instructionEpilogue);
 
     vaddr += 4;
     address += 4;
@@ -154,7 +148,68 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
 
+auto CPU::Recompiler::isInstructionDestinationZeroRegister(u32 instruction) -> bool {
+  u32 code = instruction >> 26;
+  // Consider only instructions that can't throw an arithmetic exception
+  // and don't need to call a function.
+
+  // SPECIAL
+  if (code == 0x00) {
+      u32 scode = instruction & 0x3f;
+      // 0x00 SLL Rd,Rt,Sa
+      // 0x02 SRL Rd,Rt,Sa
+      // 0x03 SRA Rd,Rt,Sa
+      // 0x04 SLLV Rd,Rt,Rs
+      // 0x06 SRLV Rd,Rt,RS
+      // 0x07 SRAV Rd,Rt,Rs
+      // 0x10 MFHI Rd
+      // 0x12 MFLO Rd
+      // 0x21 ADDU Rd,Rs,Rt
+      // 0x23 SUBU Rd,Rs,Rt
+      // 0x24 AND Rd,Rs,Rt
+      // 0x25 OR Rd,Rs,Rt
+      // 0x26 XOR Rd,Rs,Rt
+      // 0x27 NOR Rd,Rs,Rt
+      // 0x2a SLT Rd,Rs,Rt
+      // 0x2b SLTU Rd,Rs,Rt
+      if ((scode == 0)                        //
+          || (scode >= 0x02 && scode <= 0x04) //
+          || (scode >= 0x06 && scode <= 0x07) //
+          || (scode == 0x10)                  //
+          || (scode == 0x12)                  //
+          || (scode == 0x21)                  //
+          || (scode >= 0x23 && scode <= 0x27) //
+          || (scode >= 0x2a && scode <= 0x2b) //
+      ) {
+          return Rdn == 0;
+      }
+  } else {
+      // 0x09 ADDIU Rt,Rs,i16
+      // 0x0a SLTI Rt,Rs,i16
+      // 0x0b SLTIU Rt,Rs,i16
+      // 0x0c ANDI Rt,Rs,n16
+      // 0x0d ORI Rt,Rs,n16
+      // 0x0e XORI Rt,Rs,n16
+      // 0x0f LUI Rt,n16
+      if ((code == 0x09)                    //
+          || (code >= 0x0a && code <= 0x0b) //
+          || (code >= 0x0c && code <= 0x0f) //
+      ) {
+          return Rtn == 0;
+      }
+  }
+
+  return false;
+}
+
 auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
+  #if USE_NEW_RECOMPILER
+  if (isInstructionDestinationZeroRegister(instruction)) {
+    printf("zero register destination in 0x%x\n", instruction);
+    return 0;
+  }
+  #endif
+
   switch(instruction >> 26) {
 
   //SPECIAL
@@ -642,128 +697,30 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
   return 0;
 }
 
-auto CPU::Recompiler::checkIfTargetIsZeroRegister(u32 instruction) -> bool {
-  switch(instruction >> 26) {
-  //SPECIAL
-  case 0x00: {
-      switch (instruction & 0x3f) {
-      //MULT Rs,Rt
-      case 0x18: {
-        return 0; // placed in LO and HI
-      }
-
-      //MULTU Rs,Rt
-      case 0x19: {
-        return 0; // result placed in LO and HI
-      }
-
-      //DIV Rs,Rt
-      case 0x1a: {
-        return 0;
-      }
-
-      //DIVU Rs,Rt
-      case 0x1b: {
-        return 0;
-      }
-
-      //DMULT Rs,Rt
-      case 0x1c: {
-        return 0;
-      }
-
-      //DMULTU Rs,Rt
-      case 0x1d: {
-        return 0;
-      }
-
-      //DDIV Rs,Rt
-      case 0x1e: {
-        return 0;
-      }
-
-      //DDIVU Rs,Rt
-      case 0x1f: {
-        return 0;
-      }
-
-      //ADD Rd,Rs,Rt
-      case 0x20: {
-        return (Rdn == 0);
-      }
-
-      //ADDU Rd,Rs,Rt
-      case 0x21: {
-        return 1; // TODO uses reg(0)
-      }
-
-      //SUB Rd,Rs,Rt
-      case 0x22: {
-        return (Rdn == 0);
-      }
-
-      //SUBU Rd,Rs,Rt
-      case 0x23: {
-        return 1; //TODO uses reg(0)
-      }
-
-      //AND Rd,Rs,Rt
-      case 0x24: {
-        return (Rdn == 0); // TODO what is mem(Rd)?
-      }
-
-      //OR Rd,Rs,Rt
-      case 0x25: {
-        return (Rdn == 0); // TODO what is mem(Rd)?
-      }
-
-      //XOR Rd,Rs,Rt
-      case 0x26: {
-        return (Rdn == 0); // TODO what is mem(Rd)?
-      }
-
-      //NOR Rd,Rs,Rt
-      case 0x27: {
-        return 1; // TODO uses reg(0)
-      }
-
-      default: {
-        return 1;
-      }
-      break;
-      }
-  }
-
-  //ADDI Rt,Rs,i16
-  case 0x08: 
-  //ADDIU Rt,Rs,i16
-  case 0x09:
-  //SLTI Rt,Rs,i16
-  case 0x0a: 
-  //SLTIU Rt,Rs,i16
-  case 0x0b: 
-  //ANDI Rt,Rs,n16
-  case 0x0c: 
-  //ORI Rt,Rs,n16
-  case 0x0d: 
-  //XORI Rt,Rs,n16
-  case 0x0e: 
-  //LUI Rt,n16
-  case 0x0f: {
-    return (Rtn == 0);
-  }
-    default: { return 1; }
-  }
-
-  return 1;
-}
-
-
 auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   switch(instruction & 0x3f) {
 
   //SLL Rd,Rt,Sa
   case 0x00: {
+    // reg(0) refers to the first "R" scratch register of the x64 architecture
+    // mem(Rt32) is the simulated MIPS register, see:
+    //
+    //  #define IpuBase   offsetof(IPU, r[16])
+    //  #define IpuReg(r) sreg(1), offsetof(IPU, r) - IpuBase
+    //  #define Rd        IpuReg(r[0]) + Rdn * sizeof(r64)
+    //  #define Rt        IpuReg(r[0]) + Rtn * sizeof(r64)
+    //  #define Rt32      IpuReg(r[0].u32) + Rtn * sizeof(r64)
+    //
+    // sreg(1) refers to #1 "saved" register that is persisted across calls
+    // Apparently we have the IPU pointer in that reg?
+    // it's not actually a saved register since their count is set as 0 when
+    // creating the compiler. so the arguments passed to each block are in scratch regs 0-2?
+    //
+    //  struct Block {
+    //    auto execute(CPU& self) -> void {
+    //      ((void (*)(CPU*, r64*, r64*))code)(&self, &self.ipu.r[16], &self.fpu.r[16]);
+    //    }
+
     shl32(reg(0), mem(Rt32), imm(Sa));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));

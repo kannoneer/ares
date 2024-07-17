@@ -902,7 +902,7 @@ struct CPU : Thread {
     auto fastFetchBlock(u32 address) -> Block*;
 
     auto emit(u32 vaddr, u32 address, bool singleInstruction = false) -> Block*;
-    auto checkIfTargetIsZeroRegister(u32 instruction) -> bool;
+    auto isInstructionDestinationZeroRegister(u32 instruction) -> bool;
     auto emitEXECUTE(u32 instruction) -> bool;
     auto emitSPECIAL(u32 instruction) -> bool;
     auto emitREGIMM(u32 instruction) -> bool;
