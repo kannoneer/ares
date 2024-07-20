@@ -232,6 +232,10 @@ auto CPU::instructionEpilogueDontClearR0() -> s32 {
   unreachable;
 }
 
+auto CPU::debugArithmeticOverflow() -> void {
+  print("Arithmetic overflow exception!\n");
+}
+
 auto CPU::power(bool reset) -> void {
   Thread::reset();
 

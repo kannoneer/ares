@@ -29,13 +29,15 @@ namespace nall::recompiler {
       sljit_set_label(entry, sljit_emit_label(compiler));
     }
 
-    auto endFunction() -> u8* {
+    auto endFunction(sljit_uw* codeSize) -> u8* {
       u8* code = (u8*)sljit_generate_code(compiler, 0, &allocator);
       sljit_uw size = sljit_get_generated_code_size(compiler);
+      *codeSize = size;
       //printf("block 0x%p size %lu\n", code, size);
       allocator.reserve(size);
       resetCompiler();
 
+      #if 0
       FILE* fp = fopen("results/size.csv", "a");
       if (fp) {
         fprintf(fp, "%lu,%lu\n", (uintptr_t)code, size); //TODO should use emulated address as key
@@ -43,6 +45,7 @@ namespace nall::recompiler {
       } else {
         printf("couldn't open csv\n");
       }
+      #endif
       //file_buffer fb("temp/sizes.csv", file_buffer::mode::append);
       //string s;
       return code;

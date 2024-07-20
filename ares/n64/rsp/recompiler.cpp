@@ -114,7 +114,8 @@ auto RSP::Recompiler::emit(u12 address) -> Block* {
   pipeline.clocks = 0;
 
   memory::jitprotect(false);
-  block->code = endFunction();
+  unsigned long codeSize=0;
+  block->code = endFunction(&codeSize);
   block->size = address - start;
   block->pipeline = pipeline;
 
