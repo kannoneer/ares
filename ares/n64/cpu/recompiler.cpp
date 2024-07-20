@@ -579,10 +579,24 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //SW Rt,Rs,i16
   case 0x2b: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SW);
+    mov64(reg(1), imm(0x11111111)); // HACK
+
+    if (false) {
+        lea(reg(1), Rt);
+        lea(reg(2), Rs);
+        mov32(reg(3), imm(i16));
+        call(&CPU::SW);
+    } else {
+      mov64(reg(1), imm(0x22222222)); // HACK
+      //auto end = jump();
+      add64(reg(1), mem(Rs), imm(i16));
+      mov32(reg(2), mem(Rt32));
+      mov32(reg(3), imm(uint32_t(true)));
+      call(&CPU::write<Word>);
+      //setLabel(end);
+    }
+
+    mov64(reg(1), imm(0x33333333)); // HACK
     return 0;
   }
 
