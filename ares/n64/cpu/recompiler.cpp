@@ -171,6 +171,17 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
 
+auto CPU::Recompiler::emitConditionalOnFlag(flags flag, flags expected, function<void()> success, function<void()> failure) -> void {
+  //TODO parameterize reg(2)?
+    mov32_f(reg(2), flag);
+    auto overflowed = cmp32_jump(reg(2), imm(0), expected);
+    success();
+    auto end = jump();
+    setLabel(overflowed);
+    failure();
+    setLabel(end);
+}
+
 auto CPU::Recompiler::isInstructionDestinationZeroRegister(u32 instruction) -> bool {
   u32 code = instruction >> 26;
   // Consider only instructions that can't throw an arithmetic exception
@@ -299,72 +310,27 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
   //ADDI Rt,Rs,i16
   case 0x08: {
     print("Emitting code for ADDI\n");
-    mov64(reg(1), imm(0x11111111)); // HACK: make it clear this is ADDI
-    mov64(reg(2), imm(0x11111111)); // HACK: make it clear this is ADDI
-    mov64(reg(3), imm(0x11111111)); // HACK: make it clear this is ADDI
+    //mov64(reg(1), imm(0x11111111)); // HACK: make it clear this is ADDI
+    //mov64(reg(2), imm(0x11111111)); // HACK: make it clear this is ADDI
+    //mov64(reg(3), imm(0x11111111)); // HACK: make it clear this is ADDI
     if (false) {
       lea(reg(1), Rt);
       lea(reg(2), Rs);
       mov32(reg(3), imm(i16));
       call(&CPU::ADDI);
     } else {
-      //TODO how to call CPU::exception object
-      //> An integer overflow exception occurs if carries out of bits 30 and 31 differ (2’s complement overflow).
-      //> The contents of destination register rt is not modified when an integer overflow exception occurs.
-      //
-      //call(&exception.arithmeticOverflow);
-      // auto CPU::ADDI(r64& rt, cr64& rs, s16 imm) -> void {
-      //if(~(rs.u32 ^ imm) & (rs.u32 ^ rs.u32 + imm) & 1 << 31) return exception.arithmeticOverflow();
-      // rt.u64 = s32(rs.s32 + imm);
-
-      //mov32(reg(3), imm(i16))
-      //sljit_emit_op_flags(compiler, SLJIT_MOV, SLJIT_R(1), 0, SLJIT_CARRY);
-
-      // SLJIT_API_FUNC_ATTRIBUTE sljit_s32 sljit_emit_select(struct sljit_compiler *compiler, sljit_s32 type,
-      // 	sljit_s32 dst_reg,
-      // 	sljit_s32 src1, sljit_sw src1w,
-      // 	sljit_s32 src2_reg);
-
-      /* Emit a conditional select instruction which moves src1 to dst_reg,
-         if the condition is satisfied, or src2_reg to dst_reg otherwise. */
-
-      // TODO difference between SLJIT_CARRY and SLJIT_OVERFLOW?
-      // TODO no select directly in to memory. we'd need to use a third register and always store it?
-      //sljit_emit_select(compiler, SLJIT_CARRY, SLJIT_R(2), mem(Rt).fst, 0, SLJIT_R0); 
-      // SLJIT_MEM1(base.fst)
-
       add32(reg(1), mem(Rs32), imm(i16));
-      mov32_f(reg(2), flag_o);
-      auto overflowed = cmp32_jump(reg(2), imm(0), flag_ne);
-      mov64_s32(reg(1), reg(1));
-      mov64(mem(Rt), reg(1));
-      auto end = jump();
-      setLabel(overflowed);
-      //exception.arithmeticOverlfow();
-      call(&CPU::debugArithmeticOverflow);
-
-      {
-        // sljit_s32 type = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1);
-        // //if constexpr(sizeof...(P) >= 1) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2);
-        // //if constexpr(sizeof...(P) >= 2) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
-        // //if constexpr(sizeof...(P) >= 3) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 4);
-        // type |= SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_W);
-        // sljit_emit_op1(compiler, SLJIT_MOV, SLJIT_R0, 0, SLJIT_S0, 0);
-        // add64(reg(0), reg(0), imm(offsetof(CPU, exception)));
-        // sljit_emit_icall(compiler, SLJIT_CALL, type, SLJIT_IMM, SLJIT_FUNC_ADDR(imm64{CPU::Exception::arithmeticOverflow}.data));
-      }
-
-      setLabel(end);
-
-
-
-      // //ADDU Rd,Rs,Rt
-      // add32(reg(0), mem(Rs32), mem(Rt32));
-      // mov64_s32(reg(0), reg(0));
-      // mov64(mem(Rd), reg(0));
+      emitConditionalOnFlag(flag_o, flag_ne,
+        [&]() {
+          mov64_s32(reg(1), reg(1));
+          mov64(mem(Rt), reg(1));
+          },
+        [&]() {
+          call(&CPU::debugArithmeticOverflow);
+      });
     }
 
-    mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
+    //mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
 
     return 0;
   }
