@@ -340,8 +340,20 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
       mov64(mem(Rt), reg(1));
       auto end = jump();
       setLabel(overflowed);
+      //exception.arithmeticOverlfow();
       call(&CPU::debugArithmeticOverflow);
-      // //TODO call arithmeticOverflow() here
+
+      {
+        // sljit_s32 type = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1);
+        // //if constexpr(sizeof...(P) >= 1) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2);
+        // //if constexpr(sizeof...(P) >= 2) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
+        // //if constexpr(sizeof...(P) >= 3) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 4);
+        // type |= SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_W);
+        // sljit_emit_op1(compiler, SLJIT_MOV, SLJIT_R0, 0, SLJIT_S0, 0);
+        // add64(reg(0), reg(0), imm(offsetof(CPU, exception)));
+        // sljit_emit_icall(compiler, SLJIT_CALL, type, SLJIT_IMM, SLJIT_FUNC_ADDR(imm64{CPU::Exception::arithmeticOverflow}.data));
+      }
+
       setLabel(end);
 
 
