@@ -171,14 +171,14 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
 
-auto CPU::Recompiler::emitConditionalOnFlag(flags flag, flags expected, function<void()> success, function<void()> failure) -> void {
-  //TODO parameterize reg(2)?
-    mov32_f(reg(2), flag);
-    auto overflowed = cmp32_jump(reg(2), imm(0), expected);
+auto CPU::Recompiler::checkForOverflow(function<void()> success) -> void {
+    //TODO parameterize reg(2)?
+    mov32_f(reg(2), flag_o);
+    auto overflowed = cmp32_jump(reg(2), imm(0), flag_ne);
     success();
     auto end = jump();
     setLabel(overflowed);
-    failure();
+    call(&CPU::debugArithmeticOverflow);
     setLabel(end);
 }
 
@@ -320,14 +320,11 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
       call(&CPU::ADDI);
     } else {
       add32(reg(1), mem(Rs32), imm(i16));
-      emitConditionalOnFlag(flag_o, flag_ne,
+      checkForOverflow(
         [&]() {
           mov64_s32(reg(1), reg(1));
           mov64(mem(Rt), reg(1));
-          },
-        [&]() {
-          call(&CPU::debugArithmeticOverflow);
-      });
+          });
     }
 
     //mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
@@ -579,7 +576,7 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //SW Rt,Rs,i16
   case 0x2b: {
-    mov64(reg(1), imm(0x11111111)); // HACK
+    // mov64(reg(1), imm(0x11111111)); // HACK
 
     if (false) {
         lea(reg(1), Rt);
@@ -587,16 +584,18 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
         mov32(reg(3), imm(i16));
         call(&CPU::SW);
     } else {
-      mov64(reg(1), imm(0x22222222)); // HACK
+      //mov64(reg(1), imm(0x22222222)); // HACK
       //auto end = jump();
       add64(reg(1), mem(Rs), imm(i16));
       mov32(reg(2), mem(Rt32));
+      //static_assert(sizeof(bool) == sizeof(u64)); // assume bool is size of a u64 for the third argument
       mov32(reg(3), imm(uint32_t(true)));
-      call(&CPU::write<Word>);
+      //FIXME: third argument expects a bool but we pass in u64.
+      call(&CPU::write<Word>); // TODO explicitly instantiate somewhere
       //setLabel(end);
     }
 
-    mov64(reg(1), imm(0x33333333)); // HACK
+    // mov64(reg(1), imm(0x33333333)); // HACK
     return 0;
   }
 
@@ -1009,6 +1008,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LW Rt,Rs,i16
   case 0x23: {
+    // TODO how replace this with read<Word> when it returns an maybe<T> instance?
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
@@ -1506,10 +1506,19 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //ADD Rd,Rs,Rt
   case 0x20: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::ADD);
+    if (false) {
+      lea(reg(1), Rd);
+      lea(reg(2), Rs);
+      lea(reg(3), Rt);
+      call(&CPU::ADD);
+    } else {
+      add32(reg(1), mem(Rs32), mem(Rt32));
+      checkForOverflow(
+        [&]() {
+          mov64_s32(reg(1), reg(1));
+          mov64(mem(Rd), reg(1));
+          });
+    }
     return 0;
   }
 
@@ -1523,10 +1532,20 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //SUB Rd,Rs,Rt
   case 0x22: {
+    print("Compiling SUB\n");
+    if (false) {
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::SUB);
+    } else {
+      sub32(reg(1), mem(Rs32), mem(Rt32));
+      checkForOverflow(
+        [&]() {
+          mov64_s32(reg(1), reg(1));
+          mov64(mem(Rd), reg(1));
+          });
+    }
     return 0;
   }
 
