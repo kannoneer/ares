@@ -319,7 +319,7 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
       mov32(reg(3), imm(i16));
       call(&CPU::ADDI);
     } else {
-      add32(reg(1), mem(Rs32), imm(i16));
+      add32(reg(1), mem(Rs32), imm(i16), SLJIT_SET_OVERFLOW);
       checkForOverflow(
         [&]() {
           mov64_s32(reg(1), reg(1));
@@ -1512,7 +1512,7 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
       lea(reg(3), Rt);
       call(&CPU::ADD);
     } else {
-      add32(reg(1), mem(Rs32), mem(Rt32));
+      add32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
       checkForOverflow(
         [&]() {
           mov64_s32(reg(1), reg(1));
@@ -1539,7 +1539,7 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
     lea(reg(3), Rt);
     call(&CPU::SUB);
     } else {
-      sub32(reg(1), mem(Rs32), mem(Rt32));
+      sub32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
       checkForOverflow(
         [&]() {
           mov64_s32(reg(1), reg(1));
