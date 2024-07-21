@@ -86,7 +86,7 @@
     }
 
     // Always pass 'this' as argument 0 in rdi
-    u8 mov_rdi_rbx[] = {0x48,0x89,0xd8};
+    u8 mov_rdi_rbx[] = {0x48,0x89,0xdf};
     sljit_emit_op_custom(compiler, mov_rdi_rbx, sizeof(mov_rdi_rbx));
     #endif
 
