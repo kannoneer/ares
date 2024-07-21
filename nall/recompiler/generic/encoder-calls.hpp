@@ -24,12 +24,74 @@
   template<typename C, typename V, typename... P>
   alwaysinline auto call(V (C::*function)(P...)) {
     static_assert(sizeof...(P) <= 3);
+    #if 0
     sljit_s32 type = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1);
     if constexpr(sizeof...(P) >= 1) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2);
     if constexpr(sizeof...(P) >= 2) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
     if constexpr(sizeof...(P) >= 3) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 4);
-    if constexpr(!std::is_void_v<V>) type |= SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_W);
     sljit_emit_op1(compiler, SLJIT_MOV, SLJIT_R0, 0, SLJIT_S0, 0);
+#else
+    
+    sljit_s32 type = 0;
+
+    // 	void *instruction, sljit_u32 size);
+
+    // sljit's convention       amd64 ABI on Linux
+    // reg(0) = rax             arg0 = %rdi
+    // reg(1) = rsi, #1 arg     arg1 = %rsi
+    // reg(2) = rdi, #2 arg     arg2 = %rdx
+    // reg(3) = rcx, #3 arg     arg3 = %rcx
+    // 
+
+    // baseline, emits the same code as master above
+    // ---------------------------------------------
+
+    // u8 mov_rax_rbx[] = {0x48, 0x89, 0xd8};
+    // sljit_emit_op_custom(compiler, mov_rax_rbx, sizeof(mov_rax_rbx));
+    // if constexpr(sizeof...(P) >= 1) {
+    //   // rsi should be already set
+    // }
+    // if constexpr(sizeof...(P) >= 2) {
+    //   u8 mov_rdx_rdi[] = {0x48,0x89,0xfa};
+    //   sljit_emit_op_custom(compiler, mov_rdx_rdi, sizeof(mov_rdx_rdi));
+    // }
+    // if constexpr(sizeof...(P) >= 3) {
+    //   // rcx should be already set
+    // }
+    // u8 mov_rdi_rax[] = {0x48, 0x89, 0xc7};
+    // sljit_emit_op_custom(compiler, mov_rdi_rax, sizeof(mov_rdi_rax));
+
+    // alternative, this crashes at runtime
+    // ------------------------------------
+
+    // trying to replace
+    // mov rax, rbx
+    // mov rdx, rdi
+    // mov rbx, rax
+
+    // with just
+
+    // mov rdx, rdi
+    // mov rdi, rbx
+
+    if constexpr(sizeof...(P) >= 1) {
+      // rsi should be already set
+    }
+    if constexpr(sizeof...(P) >= 2) {
+      u8 mov_rdx_rdi[] = {0x48,0x89,0xfa};
+      sljit_emit_op_custom(compiler, mov_rdx_rdi, sizeof(mov_rdx_rdi));
+    }
+    if constexpr(sizeof...(P) >= 3) {
+      // rcx should be already set
+    }
+
+    // Always pass 'this' as argument 0 in rdi
+    u8 mov_rdi_rbx[] = {0x48,0x89,0xd8};
+    sljit_emit_op_custom(compiler, mov_rdi_rbx, sizeof(mov_rdi_rbx));
+    #endif
+
+    if constexpr(!std::is_void_v<V>) type |= SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_W);
+
     sljit_emit_icall(compiler, SLJIT_CALL, type, SLJIT_IMM, SLJIT_FUNC_ADDR(imm64{function}.data));
   }
 
