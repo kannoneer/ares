@@ -576,9 +576,7 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //SW Rt,Rs,i16
   case 0x2b: {
-    // mov64(reg(1), imm(0x11111111)); // HACK
-
-    if (false) {
+    if (true) {
         lea(reg(1), Rt);
         lea(reg(2), Rs);
         mov32(reg(3), imm(i16));
@@ -591,6 +589,9 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
       //static_assert(sizeof(bool) == sizeof(u64)); // assume bool is size of a u64 for the third argument
       mov32(reg(3), imm(uint32_t(true)));
       //FIXME: third argument expects a bool but we pass in u64.
+      // SYSV ABI: "The size of each argument gets rounded up to eightbytes."
+      // >Arguments of types (signed and unsigned) _Bool, char, short, int,
+      // >long, long long, and pointers are in the INTEGER class.
       call(&CPU::write<Word>); // TODO explicitly instantiate somewhere
       //setLabel(end);
     }
