@@ -171,7 +171,7 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
 
-auto CPU::Recompiler::checkForOverflow() -> sljit_jump* {
+auto CPU::Recompiler::emitOverflowCheck() -> sljit_jump* {
     // TODO parameterize reg(2)?
     // If overflow flag set: throw the exception, skip the instruction.
     mov32_f(reg(2), flag_o);
@@ -332,25 +332,11 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //ADDI Rt,Rs,i16
   case 0x08: {
-    print("Emitting code for ADDI\n");
-    //mov64(reg(1), imm(0x11111111)); // HACK: make it clear this is ADDI
-    //mov64(reg(2), imm(0x11111111)); // HACK: make it clear this is ADDI
-    //mov64(reg(3), imm(0x11111111)); // HACK: make it clear this is ADDI
-    if (false) {
-      lea(reg(1), Rt);
-      lea(reg(2), Rs);
-      mov32(reg(3), imm(i16));
-      call(&CPU::ADDI);
-    } else {
-      add32(reg(1), mem(Rs32), imm(i16), SLJIT_SET_OVERFLOW);
-      auto skip = checkForOverflow();
-      mov64_s32(reg(1), reg(1));
-      mov64(mem(Rt), reg(1));
-      setLabel(skip);
-    }
-
-    //mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
-
+    add32(reg(1), mem(Rs32), imm(i16), SLJIT_SET_OVERFLOW);
+    auto skip = emitOverflowCheck();
+    mov64_s32(reg(1), reg(1));
+    mov64(mem(Rt), reg(1));
+    setLabel(skip);
     return 0;
   }
 
@@ -457,20 +443,13 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //DADDI Rt,Rs,i16
   case 0x18: {
-    if (false) {
-      lea(reg(1), Rt);
-      lea(reg(2), Rs);
-      mov32(reg(3), imm(i16));
-      call(&CPU::DADDI);
-    } else {
-      auto skip1 = emitKernelModeCheck();
-      mov64(reg(0), mem(Rt));
-      add64(reg(0), mem(Rs), imm(i16), SLJIT_SET_OVERFLOW);
-      auto skip2 = checkForOverflow();
-      mov64(mem(Rt), reg(0));
-      setLabel(skip1); // TODO how to emit jump to an existing sljit_jump? not possible?
-      setLabel(skip2);
-    }
+    auto skip1 = emitKernelModeCheck();
+    mov64(reg(0), mem(Rt));
+    add64(reg(0), mem(Rs), imm(i16), SLJIT_SET_OVERFLOW);
+    auto skip2 = emitOverflowCheck();
+    mov64(mem(Rt), reg(0));
+    setLabel(skip1); // TODO how to emit jump to an existing sljit_jump? not possible?
+    setLabel(skip2);
     return 0;
   }
 
@@ -1538,18 +1517,11 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //ADD Rd,Rs,Rt
   case 0x20: {
-    if (false) {
-      lea(reg(1), Rd);
-      lea(reg(2), Rs);
-      lea(reg(3), Rt);
-      call(&CPU::ADD);
-    } else {
-      add32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
-      auto skip = checkForOverflow();
-      mov64_s32(reg(1), reg(1));
-      mov64(mem(Rd), reg(1));
-      setLabel(skip);
-    }
+    add32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
+    auto skip = emitOverflowCheck();
+    mov64_s32(reg(1), reg(1));
+    mov64(mem(Rd), reg(1));
+    setLabel(skip);
     return 0;
   }
 
@@ -1563,19 +1535,11 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //SUB Rd,Rs,Rt
   case 0x22: {
-    print("Compiling SUB\n");
-    if (false) {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::SUB);
-    } else {
-      sub32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
-      auto skip = checkForOverflow();
-      mov64_s32(reg(1), reg(1));
-      mov64(mem(Rd), reg(1));
-      setLabel(skip);
-    }
+    sub32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
+    auto skip = emitOverflowCheck();
+    mov64_s32(reg(1), reg(1));
+    mov64(mem(Rd), reg(1));
+    setLabel(skip);
     return 0;
   }
 
