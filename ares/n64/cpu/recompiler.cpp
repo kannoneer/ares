@@ -171,15 +171,15 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define n16 u16(instruction)
 #define n26 u32(instruction & 0x03ff'ffff)
 
-auto CPU::Recompiler::checkForOverflow(function<void()> success) -> void {
-    //TODO parameterize reg(2)?
+auto CPU::Recompiler::checkForOverflow() -> sljit_jump* {
+    // TODO parameterize reg(2)?
+    // If overflow flag set: throw the exception, skip the instruction.
     mov32_f(reg(2), flag_o);
-    auto overflowed = cmp32_jump(reg(2), imm(0), flag_ne);
-    success();
-    auto end = jump();
-    setLabel(overflowed);
+    auto didntOverflow = cmp32_jump(reg(2), imm(0), flag_eq);
     call(&CPU::Exception::arithmeticOverflow, &cpu.exception);
-    setLabel(end);
+    auto end = jump();
+    setLabel(didntOverflow);
+    return end;
 }
 
 auto CPU::Recompiler::emitKernelModeCheck() -> sljit_jump* {
@@ -343,11 +343,10 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
       call(&CPU::ADDI);
     } else {
       add32(reg(1), mem(Rs32), imm(i16), SLJIT_SET_OVERFLOW);
-      checkForOverflow(
-        [&]() {
-          mov64_s32(reg(1), reg(1));
-          mov64(mem(Rt), reg(1));
-          });
+      auto skip = checkForOverflow();
+      mov64_s32(reg(1), reg(1));
+      mov64(mem(Rt), reg(1));
+      setLabel(skip);
     }
 
     //mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
@@ -458,20 +457,28 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //DADDI Rt,Rs,i16
   case 0x18: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-
-    call(&CPU::DADDI);
+    if (false) {
+      lea(reg(1), Rt);
+      lea(reg(2), Rs);
+      mov32(reg(3), imm(i16));
+      call(&CPU::DADDI);
+    } else {
+      auto skip1 = emitKernelModeCheck();
+      mov64(reg(0), mem(Rt));
+      add64(reg(0), mem(Rs), imm(i16), SLJIT_SET_OVERFLOW);
+      auto skip2 = checkForOverflow();
+      mov64(mem(Rt), reg(0));
+      setLabel(skip1); // TODO how to emit jump to an existing sljit_jump? not possible?
+      setLabel(skip2);
+    }
     return 0;
   }
 
   //DADDIU Rt,Rs,i16
   case 0x19: {
-    sljit_jump *skip = emitKernelModeCheck();
+    auto skip = emitKernelModeCheck();
     add64(mem(Rt), mem(Rs), imm(i16));
     setLabel(skip);
-
     return 0;
   }
 
@@ -1538,11 +1545,10 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
       call(&CPU::ADD);
     } else {
       add32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
-      checkForOverflow(
-        [&]() {
-          mov64_s32(reg(1), reg(1));
-          mov64(mem(Rd), reg(1));
-          });
+      auto skip = checkForOverflow();
+      mov64_s32(reg(1), reg(1));
+      mov64(mem(Rd), reg(1));
+      setLabel(skip);
     }
     return 0;
   }
@@ -1565,11 +1571,10 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
     call(&CPU::SUB);
     } else {
       sub32(reg(1), mem(Rs32), mem(Rt32), SLJIT_SET_OVERFLOW);
-      checkForOverflow(
-        [&]() {
-          mov64_s32(reg(1), reg(1));
-          mov64(mem(Rd), reg(1));
-          });
+      auto skip = checkForOverflow();
+      mov64_s32(reg(1), reg(1));
+      mov64(mem(Rd), reg(1));
+      setLabel(skip);
     }
     return 0;
   }
