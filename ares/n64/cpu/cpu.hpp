@@ -903,6 +903,7 @@ struct CPU : Thread {
 
     auto emit(u32 vaddr, u32 address, bool singleInstruction = false) -> Block*;
     auto checkForOverflow(function<void()> success) -> void;
+    auto emitKernelModeCheck() -> sljit_jump*;
     auto isInstructionDestinationZeroRegister(u32 instruction) -> bool;
     auto emitEXECUTE(u32 instruction) -> bool;
     auto emitEXECUTE2(u32 instruction) -> bool;
