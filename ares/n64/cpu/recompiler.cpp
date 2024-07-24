@@ -183,20 +183,19 @@ auto CPU::Recompiler::checkForOverflow(function<void()> success) -> void {
 }
 
 auto CPU::Recompiler::emitKernelModeCheck() -> sljit_jump* {
-  // problem: CPU::Context is not POD, so can't use offsetof like this:
+  // Emits this check:
+  //  if(!context.kernelMode() && context.bits == 32) return exception.reservedInstruction();
+  // Problem: CPU::Context is not POD, so can't use offsetof like this:
   //    mov64(reg(1), mem(sreg(3), offsetof(CPU::Context, mode)));
 
-  // r0 <- self.context.mode
   // TODO is u32* -> sljit_sw conversion safe? sign mismatch
-  // TODO address memory directly below in comparison
-  sljit_emit_op1(compiler, SLJIT_MOV32,
-                  SLJIT_R(0), 0,
-                  SLJIT_MEM0(), (sljit_sw)&self.context.mode);
-  auto kernelmode = cmp32_jump(reg(0), imm((sljit_sw)CPU::Context::Mode::Kernel), flag_eq);
-  sljit_emit_op1(compiler, SLJIT_MOV32,
-                  SLJIT_R(0), 0,
-                  SLJIT_MEM0(), (sljit_sw)&self.context.bits);
-  auto bits = cmp32_jump(reg(0), imm(32), flag_ne);
+  auto kernelmode = cmp32_jump(
+    op_base(SLJIT_MEM, (sljit_sw)&self.context.mode),
+    imm((sljit_sw)CPU::Context::Mode::Kernel), flag_eq);
+
+  auto bits = cmp32_jump(
+    op_base(SLJIT_MEM, (sljit_sw)&self.context.bits),
+    imm(32), flag_ne);
 
   call(&CPU::Exception::reservedInstruction, &self.exception);
   auto skip = jump(); // Don't execute the actual instruction
@@ -469,16 +468,8 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //DADDIU Rt,Rs,i16
   case 0x19: {
-    mov64(reg(0), imm(0x11111111)); // HACK: banner
     sljit_jump *skip = emitKernelModeCheck();
-
-    if (true) {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::DADDIU);
-    } else {
-    }
+    add64(mem(Rt), mem(Rs), imm(i16));
     setLabel(skip);
 
     return 0;
