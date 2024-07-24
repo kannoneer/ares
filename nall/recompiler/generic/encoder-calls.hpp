@@ -24,7 +24,7 @@
   template<typename C, typename V, typename... P>
   alwaysinline auto call(V (C::*function)(P...)) {
     static_assert(sizeof...(P) <= 3);
-    #if 0
+  #if 1
     sljit_s32 type = SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 1);
     if constexpr(sizeof...(P) >= 1) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 2);
     if constexpr(sizeof...(P) >= 2) type |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, 3);
@@ -61,8 +61,8 @@
     // u8 mov_rdi_rax[] = {0x48, 0x89, 0xc7};
     // sljit_emit_op_custom(compiler, mov_rdi_rax, sizeof(mov_rdi_rax));
 
-    // alternative, this crashes at runtime
-    // ------------------------------------
+    // alternative, works but doesn't seem faster?
+    // -------------------------------------------
 
     // trying to replace
     // mov rax, rbx
