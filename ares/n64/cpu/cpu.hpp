@@ -855,7 +855,7 @@ struct CPU : Thread {
 
     struct Block {
       auto execute(CPU& self) -> void {
-        ((void (*)(CPU*, r64*, r64*))code)(&self, &self.ipu.r[16], &self.fpu.r[16]);
+        ((void (*)(CPU*, r64*, r64*, Context*))code)(&self, &self.ipu.r[16], &self.fpu.r[16], &self.context);
       }
 
       u8* code;
