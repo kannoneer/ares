@@ -41,7 +41,6 @@ struct CPU : Thread {
   auto instructionPrologue(u32 instruction) -> void;
   auto instructionEpilogue() -> s32;
   auto instructionEpilogueDontClearR0() -> s32;
-  auto debugArithmeticOverflow() -> void;
 
   auto power(bool reset) -> void;
 

@@ -178,7 +178,7 @@ auto CPU::Recompiler::checkForOverflow(function<void()> success) -> void {
     success();
     auto end = jump();
     setLabel(overflowed);
-    call(&CPU::debugArithmeticOverflow);
+    call(&CPU::Exception::arithmeticOverflow, &cpu.exception);
     setLabel(end);
 }
 
