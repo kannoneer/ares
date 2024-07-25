@@ -158,6 +158,7 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define Rt32      IpuReg(r[0].u32) + Rtn * sizeof(r64)
 #define Rs        IpuReg(r[0]) + Rsn * sizeof(r64)
 #define Rs32      IpuReg(r[0].u32) + Rsn * sizeof(r64)
+#define Rfake     IpuReg(r[32].u32)
 #define Lo        IpuReg(lo)
 #define Hi        IpuReg(hi)
 
