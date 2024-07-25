@@ -371,10 +371,10 @@ struct CPU : Thread {
       SP,                              //stack pointer
       S8,                              //saved register
       RA,                              //return address
-      FAKE,                            //fake target for R0 writes
     };
 
-    r64 r[33];
+    r64 r[32];
+    r64 rfake; //non-existent target for r0 writes
     r64 lo;
     r64 hi;
     u64 pc;  //program counter
