@@ -38,7 +38,7 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
   }
 
   auto block = (Block*)allocator.acquire(sizeof(Block));
-  beginFunction(4);
+  beginFunction(3);
 
   Thread thread;
   bool hasBranched = 0;
