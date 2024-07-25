@@ -903,7 +903,7 @@ struct CPU : Thread {
     auto fastFetchBlock(u32 address) -> Block*;
 
     auto emit(u32 vaddr, u32 address, bool singleInstruction = false) -> Block*;
-    auto emitOverflowCheck() -> sljit_jump*;
+    auto checkForOverflow() -> sljit_jump*;
     auto emitKernelModeCheck() -> sljit_jump*;
     auto isInstructionDestinationZeroRegister(u32 instruction) -> bool;
     auto emitEXECUTE(u32 instruction) -> bool;
