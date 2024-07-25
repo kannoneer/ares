@@ -161,6 +161,8 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 #define Rfake     IpuReg(r[32].u32)
 #define Lo        IpuReg(lo)
 #define Hi        IpuReg(hi)
+#define RtDest    sreg(1), (Rtn != 0) ? offsetof(IPU, r[0]) - IpuBase + Rtn * sizeof(r64) : offsetof(IPU, r[32]) - IpuBase
+#define RdDest    sreg(1), (Rdn != 0) ? offsetof(IPU, r[0]) - IpuBase + Rdn * sizeof(r64) : offsetof(IPU, r[32]) - IpuBase
 
 #define FpuBase   offsetof(FPU, r[16])
 #define FpuReg(r) sreg(2), offsetof(FPU, r) - FpuBase
@@ -202,7 +204,6 @@ auto CPU::Recompiler::emitKernelModeCheck() -> sljit_jump* {
   auto skip = jump(); // Don't execute the actual instruction
   setLabel(kernelmode);
   setLabel(bits);
-
   return skip;
 }
 
@@ -333,536 +334,7 @@ auto CPU::Recompiler::emitEXECUTE2(u32 instruction) -> bool {
 
   //ADDI Rt,Rs,i16
   case 0x08: {
-    print("Emitting code for ADDI\n");
-    //mov64(reg(1), imm(0x11111111)); // HACK: make it clear this is ADDI
-    //mov64(reg(2), imm(0x11111111)); // HACK: make it clear this is ADDI
-    //mov64(reg(3), imm(0x11111111)); // HACK: make it clear this is ADDI
-    if (false) {
-      lea(reg(1), Rt);
-      lea(reg(2), Rs);
-      mov32(reg(3), imm(i16));
-      call(&CPU::ADDI);
-    } else {
-      add32(reg(1), mem(Rs32), imm(i16), SLJIT_SET_OVERFLOW);
-      auto skip = checkForOverflow();
-      mov64_s32(reg(1), reg(1));
-      mov64(mem(Rt), reg(1));
-      setLabel(skip);
-    }
-
-    //mov64(reg(1), imm(0x22222222)); // HACK: make it clear this is ADDI
-
-    return 0;
-  }
-
-  //ADDIU Rt,Rs,i16
-  case 0x09: {
-    add32(reg(0), mem(Rs32), imm(i16));
-    mov64_s32(reg(0), reg(0));
-    mov64(mem(Rt), reg(0));
-    return 0;
-  }
-
-  //SLTI Rt,Rs,i16
-  case 0x0a: {
-    cmp64(mem(Rs), imm(i16), set_slt);
-    mov64_f(mem(Rt), flag_slt);
-    return 0;
-  }
-
-  //SLTIU Rt,Rs,i16
-  case 0x0b: {
-    cmp64(mem(Rs), imm(i16), set_ult);
-    mov64_f(mem(Rt), flag_ult);
-    return 0;
-  }
-
-  //ANDI Rt,Rs,n16
-  case 0x0c: {
-    and64(mem(Rt), mem(Rs), imm(n16));
-    return 0;
-  }
-
-  //ORI Rt,Rs,n16
-  case 0x0d: {
-    or64(mem(Rt), mem(Rs), imm(n16));
-    return 0;
-  }
-
-  //XORI Rt,Rs,n16
-  case 0x0e: {
-    xor64(mem(Rt), mem(Rs), imm(n16));
-    return 0;
-  }
-
-  //LUI Rt,n16
-  case 0x0f: {
-    mov64(mem(Rt), imm(s32(n16 << 16)));
-    return 0;
-  }
-
-  //SCC
-  case 0x10: {
-    return emitSCC(instruction);
-  }
-
-  //FPU
-  case 0x11: {
-    return emitFPU(instruction);
-  }
-
-  //COP2
-  case 0x12: {
-    return emitCOP2(instruction);
-  }
-
-  //COP3
-  case 0x13: {
-    call(&CPU::COP3);
-    return 1;
-  }
-
-  //BEQL Rs,Rt,i16
-  case 0x14: {
-    lea(reg(1), Rs);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(i16));
-    call(&CPU::BEQL);
-    return 1;
-  }
-
-  //BNEL Rs,Rt,i16
-  case 0x15: {
-    lea(reg(1), Rs);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(i16));
-    call(&CPU::BNEL);
-    return 1;
-  }
-
-  //BLEZL Rs,i16
-  case 0x16: {
-    lea(reg(1), Rs);
-    mov32(reg(2), imm(i16));
-    call(&CPU::BLEZL);
-    return 1;
-  }
-
-  //BGTZL Rs,i16
-  case 0x17: {
-    lea(reg(1), Rs);
-    mov32(reg(2), imm(i16));
-    call(&CPU::BGTZL);
-    return 1;
-  }
-
-  //DADDI Rt,Rs,i16
-  case 0x18: {
-    if (false) {
-      lea(reg(1), Rt);
-      lea(reg(2), Rs);
-      mov32(reg(3), imm(i16));
-      call(&CPU::DADDI);
-    } else {
-      auto skip1 = emitKernelModeCheck();
-      mov64(reg(0), mem(Rt));
-      add64(reg(0), mem(Rs), imm(i16), SLJIT_SET_OVERFLOW);
-      auto skip2 = checkForOverflow();
-      mov64(mem(Rt), reg(0));
-      setLabel(skip1); // TODO how to emit jump to an existing sljit_jump? not possible?
-      setLabel(skip2);
-    }
-    return 0;
-  }
-
-  //DADDIU Rt,Rs,i16
-  case 0x19: {
-    auto skip = emitKernelModeCheck();
-    add64(mem(Rt), mem(Rs), imm(i16));
-    setLabel(skip);
-    return 0;
-  }
-
-  //LDL Rt,Rs,i16
-  case 0x1a: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LDL);
-    return 0;
-  }
-
-  //LDR Rt,Rs,i16
-  case 0x1b: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LDR);
-    return 0;
-  }
-
-  //INVALID
-  case range4(0x1c, 0x1f): {
-    call(&CPU::INVALID);
-    return 1;
-  }
-
-  //LB Rt,Rs,i16
-  case 0x20: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LB);
-    return 0;
-  }
-
-  //LH Rt,Rs,i16
-  case 0x21: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LH);
-    return 0;
-  }
-
-  //LWL Rt,Rs,i16
-  case 0x22: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LWL);
-    return 0;
-  }
-
-  //LW Rt,Rs,i16
-  case 0x23: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LW);
-    return 0;
-  }
-
-  //LBU Rt,Rs,i16
-  case 0x24: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LBU);
-    return 0;
-  }
-
-  //LHU Rt,Rs,i16
-  case 0x25: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LHU);
-    return 0;
-  }
-
-  //LWR Rt,Rs,i16
-  case 0x26: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LWR);
-    return 0;
-  }
-
-  //LWU Rt,Rs,i16
-  case 0x27: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LWU);
-    return 0;
-  }
-
-  //SB Rt,Rs,i16
-  case 0x28: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SB);
-    return 0;
-  }
-
-  //SH Rt,Rs,i16
-  case 0x29: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SH);
-    return 0;
-  }
-
-  //SWL Rt,Rs,i16
-  case 0x2a: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SWL);
-    return 0;
-  }
-
-  //SW Rt,Rs,i16
-  case 0x2b: {
-    if (true) {
-        lea(reg(1), Rt);
-        lea(reg(2), Rs);
-        mov32(reg(3), imm(i16));
-        call(&CPU::SW);
-    } else {
-      //mov64(reg(1), imm(0x22222222)); // HACK
-      //auto end = jump();
-      add64(reg(1), mem(Rs), imm(i16));
-      mov32(reg(2), mem(Rt32));
-      //static_assert(sizeof(bool) == sizeof(u64)); // assume bool is size of a u64 for the third argument
-      mov32(reg(3), imm(uint32_t(true)));
-      //FIXME: third argument expects a bool but we pass in u64.
-      // SYSV ABI: "The size of each argument gets rounded up to eightbytes."
-      // >Arguments of types (signed and unsigned) _Bool, char, short, int,
-      // >long, long long, and pointers are in the INTEGER class.
-      call(&CPU::write<Word>); // TODO explicitly instantiate somewhere
-      //setLabel(end);
-    }
-
-    // mov64(reg(1), imm(0x33333333)); // HACK
-    return 0;
-  }
-
-  //SDL Rt,Rs,i16
-  case 0x2c: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SDL);
-    return 0;
-  }
-
-  //SDR Rt,Rs,i16
-  case 0x2d: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SDR);
-    return 0;
-  }
-
-  //SWR Rt,Rs,i16
-  case 0x2e: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SWR);
-    return 0;
-  }
-
-  //CACHE op(offset),base
-  case 0x2f: {
-    mov32(reg(1), imm(instruction >> 16 & 31));
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::CACHE);
-    return 0;
-  }
-
-  //LL Rt,Rs,i16
-  case 0x30: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LL);
-    return 0;
-  }
-
-  //LWC1 Ft,Rs,i16
-  case 0x31: {
-    mov32(reg(1), imm(Ftn));
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LWC1);
-    return 0;
-  }
-
-  //LWC2
-  case 0x32: {
-    call(&CPU::COP2INVALID);
-    return 1;
-  }
-
-  //LWC3
-  case 0x33: {
-    call(&CPU::COP3);
-    return 1;
-  }
-
-  //LLD Rt,Rs,i16
-  case 0x34: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LLD);
-    return 0;
-  }
-
-  //LDC1 Ft,Rs,i16
-  case 0x35: {
-    mov32(reg(1), imm(Ftn));
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LDC1);
-    return 0;
-  }
-
-  //LDC2
-  case 0x36: {
-    call(&CPU::COP2INVALID);
-    return 1;
-  }
-
-  //LD Rt,Rs,i16
-  case 0x37: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::LD);
-    return 0;
-  }
-
-  //SC Rt,Rs,i16
-  case 0x38: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SC);
-    return 0;
-  }
-
-  //SWC1 Ft,Rs,i16
-  case 0x39: {
-    mov32(reg(1), imm(Ftn));
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SWC1);
-    return 0;
-  }
-
-  //SWC2
-  case 0x3a: {
-    call(&CPU::COP2INVALID);
-    return 1;
-  }
-
-  //SWC3
-  case 0x3b: {
-    call(&CPU::COP3);
-    return 1;
-  }
-
-  //SCD Rt,Rs,i16
-  case 0x3c: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SCD);
-    return 0;
-  }
-
-  //SDC1 Ft,Rs,i16
-  case 0x3d: {
-    mov32(reg(1), imm(Ftn));
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SDC1);
-    return 0;
-  }
-
-  //SDC2
-  case 0x3e: {
-    call(&CPU::COP2INVALID);
-    return 1;
-  }
-
-  //SD Rt,Rs,i16
-  case 0x3f: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::SD);
-    return 0;
-  }
-
-  }
-
-  return 0;
-}
-
-auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
-  switch(instruction >> 26) {
-
-  //SPECIAL
-  case 0x00: {
-    return emitSPECIAL(instruction);
-  }
-
-  //REGIMM
-  case 0x01: {
-    return emitREGIMM(instruction);
-  }
-
-  //J n26
-  case 0x02: {
-    mov32(reg(1), imm(n26));
-    call(&CPU::J);
-    return 1;
-  }
-
-  //JAL n26
-  case 0x03: {
-    mov32(reg(1), imm(n26));
-    call(&CPU::JAL);
-    return 1;
-  }
-
-  //BEQ Rs,Rt,i16
-  case 0x04: {
-    lea(reg(1), Rs);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(i16));
-    call(&CPU::BEQ);
-    return 1;
-  }
-
-  //BNE Rs,Rt,i16
-  case 0x05: {
-    lea(reg(1), Rs);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(i16));
-    call(&CPU::BNE);
-    return 1;
-  }
-
-  //BLEZ Rs,i16
-  case 0x06: {
-    lea(reg(1), Rs);
-    mov32(reg(2), imm(i16));
-    call(&CPU::BLEZ);
-    return 1;
-  }
-
-  //BGTZ Rs,i16
-  case 0x07: {
-    lea(reg(1), Rs);
-    mov32(reg(2), imm(i16));
-    call(&CPU::BGTZ);
-    return 1;
-  }
-
-  //ADDI Rt,Rs,i16
-  case 0x08: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::ADDI);
@@ -972,7 +444,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //DADDI Rt,Rs,i16
   case 0x18: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::DADDI);
@@ -981,7 +453,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //DADDIU Rt,Rs,i16
   case 0x19: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::DADDIU);
@@ -990,7 +462,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LDL Rt,Rs,i16
   case 0x1a: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LDL);
@@ -999,7 +471,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LDR Rt,Rs,i16
   case 0x1b: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LDR);
@@ -1014,7 +486,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LB Rt,Rs,i16
   case 0x20: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LB);
@@ -1023,7 +495,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LH Rt,Rs,i16
   case 0x21: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LH);
@@ -1032,7 +504,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LWL Rt,Rs,i16
   case 0x22: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWL);
@@ -1041,8 +513,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LW Rt,Rs,i16
   case 0x23: {
-    // TODO how replace this with read<Word> when it returns an maybe<T> instance?
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LW);
@@ -1051,7 +522,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LBU Rt,Rs,i16
   case 0x24: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LBU);
@@ -1060,7 +531,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LHU Rt,Rs,i16
   case 0x25: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LHU);
@@ -1069,7 +540,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LWR Rt,Rs,i16
   case 0x26: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWR);
@@ -1078,7 +549,495 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LWU Rt,Rs,i16
   case 0x27: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LWU);
+    return 0;
+  }
+
+  //SB Rt,Rs,i16
+  case 0x28: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SB);
+    return 0;
+  }
+
+  //SH Rt,Rs,i16
+  case 0x29: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SH);
+    return 0;
+  }
+
+  //SWL Rt,Rs,i16
+  case 0x2a: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SWL);
+    return 0;
+  }
+
+  //SW Rt,Rs,i16
+  case 0x2b: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SW);
+    return 0;
+  }
+
+  //SDL Rt,Rs,i16
+  case 0x2c: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SDL);
+    return 0;
+  }
+
+  //SDR Rt,Rs,i16
+  case 0x2d: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SDR);
+    return 0;
+  }
+
+  //SWR Rt,Rs,i16
+  case 0x2e: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SWR);
+    return 0;
+  }
+
+  //CACHE op(offset),base
+  case 0x2f: {
+    mov32(reg(1), imm(instruction >> 16 & 31));
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::CACHE);
+    return 0;
+  }
+
+  //LL Rt,Rs,i16
+  case 0x30: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LL);
+    return 0;
+  }
+
+  //LWC1 Ft,Rs,i16
+  case 0x31: {
+    mov32(reg(1), imm(Ftn));
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LWC1);
+    return 0;
+  }
+
+  //LWC2
+  case 0x32: {
+    call(&CPU::COP2INVALID);
+    return 1;
+  }
+
+  //LWC3
+  case 0x33: {
+    call(&CPU::COP3);
+    return 1;
+  }
+
+  //LLD Rt,Rs,i16
+  case 0x34: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LLD);
+    return 0;
+  }
+
+  //LDC1 Ft,Rs,i16
+  case 0x35: {
+    mov32(reg(1), imm(Ftn));
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LDC1);
+    return 0;
+  }
+
+  //LDC2
+  case 0x36: {
+    call(&CPU::COP2INVALID);
+    return 1;
+  }
+
+  //LD Rt,Rs,i16
+  case 0x37: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LD);
+    return 0;
+  }
+
+  //SC Rt,Rs,i16
+  case 0x38: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SC);
+    return 0;
+  }
+
+  //SWC1 Ft,Rs,i16
+  case 0x39: {
+    mov32(reg(1), imm(Ftn));
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SWC1);
+    return 0;
+  }
+
+  //SWC2
+  case 0x3a: {
+    call(&CPU::COP2INVALID);
+    return 1;
+  }
+
+  //SWC3
+  case 0x3b: {
+    call(&CPU::COP3);
+    return 1;
+  }
+
+  //SCD Rt,Rs,i16
+  case 0x3c: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SCD);
+    return 0;
+  }
+
+  //SDC1 Ft,Rs,i16
+  case 0x3d: {
+    mov32(reg(1), imm(Ftn));
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SDC1);
+    return 0;
+  }
+
+  //SDC2
+  case 0x3e: {
+    call(&CPU::COP2INVALID);
+    return 1;
+  }
+
+  //SD Rt,Rs,i16
+  case 0x3f: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::SD);
+    return 0;
+  }
+
+  }
+
+  return 0;
+}
+
+auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
+  switch(instruction >> 26) {
+
+  //SPECIAL
+  case 0x00: {
+    return emitSPECIAL(instruction);
+  }
+
+  //REGIMM
+  case 0x01: {
+    return emitREGIMM(instruction);
+  }
+
+  //J n26
+  case 0x02: {
+    mov32(reg(1), imm(n26));
+    call(&CPU::J);
+    return 1;
+  }
+
+  //JAL n26
+  case 0x03: {
+    mov32(reg(1), imm(n26));
+    call(&CPU::JAL);
+    return 1;
+  }
+
+  //BEQ Rs,Rt,i16
+  case 0x04: {
+    lea(reg(1), Rs);
+    lea(reg(2), Rt);
+    mov32(reg(3), imm(i16));
+    call(&CPU::BEQ);
+    return 1;
+  }
+
+  //BNE Rs,Rt,i16
+  case 0x05: {
+    lea(reg(1), Rs);
+    lea(reg(2), Rt);
+    mov32(reg(3), imm(i16));
+    call(&CPU::BNE);
+    return 1;
+  }
+
+  //BLEZ Rs,i16
+  case 0x06: {
+    lea(reg(1), Rs);
+    mov32(reg(2), imm(i16));
+    call(&CPU::BLEZ);
+    return 1;
+  }
+
+  //BGTZ Rs,i16
+  case 0x07: {
+    lea(reg(1), Rs);
+    mov32(reg(2), imm(i16));
+    call(&CPU::BGTZ);
+    return 1;
+  }
+
+  //ADDI Rt,Rs,i16
+  case 0x08: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::ADDI);
+    return 0;
+  }
+
+  //ADDIU Rt,Rs,i16
+  case 0x09: {
+    add32(reg(0), mem(Rs32), imm(i16));
+    mov64_s32(reg(0), reg(0));
+    mov64(mem(Rt), reg(0));
+    return 0;
+  }
+
+  //SLTI Rt,Rs,i16
+  case 0x0a: {
+    cmp64(mem(Rs), imm(i16), set_slt);
+    mov64_f(mem(Rt), flag_slt);
+    return 0;
+  }
+
+  //SLTIU Rt,Rs,i16
+  case 0x0b: {
+    cmp64(mem(Rs), imm(i16), set_ult);
+    mov64_f(mem(Rt), flag_ult);
+    return 0;
+  }
+
+  //ANDI Rt,Rs,n16
+  case 0x0c: {
+    and64(mem(Rt), mem(Rs), imm(n16));
+    return 0;
+  }
+
+  //ORI Rt,Rs,n16
+  case 0x0d: {
+    or64(mem(Rt), mem(Rs), imm(n16));
+    return 0;
+  }
+
+  //XORI Rt,Rs,n16
+  case 0x0e: {
+    xor64(mem(Rt), mem(Rs), imm(n16));
+    return 0;
+  }
+
+  //LUI Rt,n16
+  case 0x0f: {
+    mov64(mem(Rt), imm(s32(n16 << 16)));
+    return 0;
+  }
+
+  //SCC
+  case 0x10: {
+    return emitSCC(instruction);
+  }
+
+  //FPU
+  case 0x11: {
+    return emitFPU(instruction);
+  }
+
+  //COP2
+  case 0x12: {
+    return emitCOP2(instruction);
+  }
+
+  //COP3
+  case 0x13: {
+    call(&CPU::COP3);
+    return 1;
+  }
+
+  //BEQL Rs,Rt,i16
+  case 0x14: {
+    lea(reg(1), Rs);
+    lea(reg(2), Rt);
+    mov32(reg(3), imm(i16));
+    call(&CPU::BEQL);
+    return 1;
+  }
+
+  //BNEL Rs,Rt,i16
+  case 0x15: {
+    lea(reg(1), Rs);
+    lea(reg(2), Rt);
+    mov32(reg(3), imm(i16));
+    call(&CPU::BNEL);
+    return 1;
+  }
+
+  //BLEZL Rs,i16
+  case 0x16: {
+    lea(reg(1), Rs);
+    mov32(reg(2), imm(i16));
+    call(&CPU::BLEZL);
+    return 1;
+  }
+
+  //BGTZL Rs,i16
+  case 0x17: {
+    lea(reg(1), Rs);
+    mov32(reg(2), imm(i16));
+    call(&CPU::BGTZL);
+    return 1;
+  }
+
+  //DADDI Rt,Rs,i16
+  case 0x18: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::DADDI);
+    return 0;
+  }
+
+  //DADDIU Rt,Rs,i16
+  case 0x19: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::DADDIU);
+    return 0;
+  }
+
+  //LDL Rt,Rs,i16
+  case 0x1a: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LDL);
+    return 0;
+  }
+
+  //LDR Rt,Rs,i16
+  case 0x1b: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LDR);
+    return 0;
+  }
+
+  //INVALID
+  case range4(0x1c, 0x1f): {
+    call(&CPU::INVALID);
+    return 1;
+  }
+
+  //LB Rt,Rs,i16
+  case 0x20: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LB);
+    return 0;
+  }
+
+  //LH Rt,Rs,i16
+  case 0x21: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LH);
+    return 0;
+  }
+
+  //LWL Rt,Rs,i16
+  case 0x22: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LWL);
+    return 0;
+  }
+
+  //LW Rt,Rs,i16
+  case 0x23: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LW);
+    return 0;
+  }
+
+  //LBU Rt,Rs,i16
+  case 0x24: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LBU);
+    return 0;
+  }
+
+  //LHU Rt,Rs,i16
+  case 0x25: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LHU);
+    return 0;
+  }
+
+  //LWR Rt,Rs,i16
+  case 0x26: {
+    lea(reg(1), RtDest);
+    lea(reg(2), Rs);
+    mov32(reg(3), imm(i16));
+    call(&CPU::LWR);
+    return 0;
+  }
+
+  //LWU Rt,Rs,i16
+  case 0x27: {
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWU);
@@ -1159,7 +1118,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LL Rt,Rs,i16
   case 0x30: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LL);
@@ -1189,7 +1148,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LLD Rt,Rs,i16
   case 0x34: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LLD);
@@ -1213,7 +1172,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LD Rt,Rs,i16
   case 0x37: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LD);
@@ -1222,7 +1181,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //SC Rt,Rs,i16
   case 0x38: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SC);
@@ -1252,7 +1211,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //SCD Rt,Rs,i16
   case 0x3c: {
-    lea(reg(1), Rt);
+    lea(reg(1), RtDest);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SCD);
