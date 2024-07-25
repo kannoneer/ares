@@ -169,8 +169,8 @@ auto CPU::Recompiler::emit(u32 vaddr, u32 address, bool singleInstruction) -> Bl
 // PROBLEM: first argument evaluates either to sreg or imm type at runtime. so they don't share a type
 // #define RtDest    (Rtn != 0) ? sreg(1) : imm(0), (Rtn != 0) ? Rt : SLJIT_MEM1(SLJIT_SP)
 // #define RdDest    (Rtn != 0) ? sreg(1) : imm(0), (Rdn != 0) ? Rd : SLJIT_MEM1(SLJIT_SP)
-#define RtDest    sreg(1), (Rtn != 0) ? Rt : offsetof(IPU, rfake)
-#define RdDest    sreg(1), (Rdn != 0) ? Rd : offsetof(IPU, rfake)
+#define RtDest    sreg(1), (Rtn != 0) ? Rt : offsetof(IPU, rfake) - IpuBase
+#define RdDest    sreg(1), (Rdn != 0) ? Rd : offsetof(IPU, rfake) - IpuBase
 
 #define FpuBase   offsetof(FPU, r[16])
 #define FpuReg(r) sreg(2), offsetof(FPU, r) - FpuBase
