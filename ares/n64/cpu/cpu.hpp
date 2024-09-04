@@ -852,45 +852,60 @@ struct CPU : Thread {
       }
 
       u8* code;
-    };
 
-    struct Pool {
-      Block* blocks[1 << 6];
+      // TODO store the ranges outside Blocks, here just for convenience of emit() implementation
+      struct {
+        u64 begin;
+        u64 end;
+      } vrange; // virtual address range
+
+      struct {
+        u32 begin;
+        u32 end;
+      } arange; // physical address range
     };
 
     auto reset() -> void {
-      for(u32 index : range(1 << 21)) pools[index] = nullptr;
+      memory::jitprotect(false); // TODO is jitprotect used correctly here?
+      blockMap.clear();
+      blockRanges.clear();
+      memory::jitprotect(true);
     }
 
     auto invalidate(u32 address) -> void {
-      /* FIXME: Recompiler shouldn't be so aggressive with pool eviction
-       * Sometimes there are overlapping blocks, so clearing just one block
-       * isn't sufficient and causes some games to crash (Jet Force Gemini)
-       * the recompiler needs to be smarter with block tracking
-       * Until then, clear the entire pool and live with the performance hit.
-      */
-      #if 1
-      invalidatePool(address);
-      #else
-      auto pool = pools[address >> 8 & 0x1fffff];
-      if(!pool) return;
-      memory::jitprotect(false);
-      pool->blocks[address >> 2 & 0x3f] = nullptr;
-      memory::jitprotect(true);
-      #endif
-    }
+     constexpr bool verbose = false;
+      if (verbose) print("invalidate(", address, ")\n");
 
-    auto invalidatePool(u32 address) -> void {
-      pools[address >> 8 & 0x1fffff] = nullptr;
+      memory::jitprotect(false);
+      for (auto rangeIt = blockRanges.cbegin(); rangeIt != blockRanges.cend();) {
+        auto range = rangeIt->first;
+        if (verbose)print("  range ", std::get<0>(range), "-", std::get<1>(range), " vs ", address, "\n");
+        if (address >= std::get<0>(range) && address < std::get<1>(range)) {
+          if (verbose)print("  found\n");
+          auto it = blockMap.find(rangeIt->second);
+          if (it == blockMap.end()) {
+            if (verbose)print("Bug: Block ranges pointed to an invalid key");
+          } else {
+            blockMap.erase(it);
+          }
+          if (verbose)print("  erasing\n");
+          rangeIt = blockRanges.erase(rangeIt);
+        } else {
+          if (verbose)print("  next\n");
+          rangeIt = std::next(rangeIt);
+        }
+      }
+      memory::jitprotect(true);
+
+      if (verbose)print("done invalidating\n");
     }
 
     auto invalidateRange(u32 address, u32 length) -> void {
-      for (u32 s = 0; s < length; s += 256)
-        invalidatePool(address + s);
-      invalidatePool(address + length - 1);
+      for (u32 s = 0; s < length; s+=4) {
+        invalidate(address + s);
+      }
     }
 
-    auto pool(u32 address) -> Pool*;
     auto block(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
 
     auto emit(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
@@ -905,7 +920,9 @@ struct CPU : Thread {
     bool enabled = false;
     bool callInstructionPrologue = false;
     bump_allocator allocator;
-    Pool* pools[1 << 21];  //2_MiB * sizeof(void*) == 16_MiB
+    typedef std::tuple<u64, u32, bool> BlockKey;
+    std::map<BlockKey, Block*> blockMap;
+    std::map<std::tuple<u32, u32>, BlockKey> blockRanges;
   } recompiler{*this};
 
   struct Disassembler {

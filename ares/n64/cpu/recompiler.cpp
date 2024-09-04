@@ -1,18 +1,28 @@
-auto CPU::Recompiler::pool(u32 address) -> Pool* {
-  auto& pool = pools[address >> 8 & 0x1fffff];
-  if(!pool) {
-    pool = (Pool*)allocator.acquire(sizeof(Pool));
-    memory::jitprotect(false);
-    *pool = {};
-    memory::jitprotect(true);
-  }
-  return pool;
-}
-
 auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
-  if(auto block = pool(address)->blocks[address >> 2 & 0x3f]) return block;
+  auto key = std::tuple<u64,u32,bool>(vaddr, address, singleInstruction);
+
+  constexpr bool verbose = false;
+
+  if (verbose) print("block(key=(",
+      std::get<0>(key), ", ",
+      std::get<1>(key), ", ",
+      std::get<2>(key), ")\n");
+  auto it = blockMap.find(key);
+  if (it != blockMap.end()) {
+    if (verbose) print("  hit\n");
+    return it->second;
+  }
+
   auto block = emit(vaddr, address, singleInstruction);
-  pool(address)->blocks[address >> 2 & 0x3f] = block;
+  blockMap.insert(std::make_pair(key, block));
+  auto range = std::make_tuple(block->arange.begin, block->arange.end);
+  blockRanges.insert(std::make_pair(range, key));
+
+  if (verbose) print("miss, range ", std::get<0>(range), "-", std::get<1>(range), " block ", block, "(", 
+    std::get<0>(key), ", ",
+    std::get<1>(key), ", ",
+    std::get<2>(key), ", ",
+   ")\n");
   memory::jitprotect(true);
   return block;
 }
@@ -31,6 +41,8 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
   auto block = (Block*)allocator.acquire(sizeof(Block));
   beginFunction(3);
 
+  u64 vaddrBegin = vaddr;
+  u32 addressBegin = address;
   Thread thread;
   bool hasBranched = 0;
   constexpr u32 branchToSelf = 0x1000'ffff;  //beq 0,0,<pc>
@@ -68,6 +80,11 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
 
   memory::jitprotect(false);
   block->code = endFunction();
+
+  block->vrange.begin = vaddrBegin;
+  block->vrange.end = vaddr;
+  block->arange.begin = addressBegin;
+  block->arange.end = address;
 
 //print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
   return block;

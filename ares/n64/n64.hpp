@@ -11,6 +11,9 @@
 #include <nall/recompiler/generic/generic.hpp>
 #include <component/processor/sm5k/sm5k.hpp>
 
+#include <map>
+#include <tuple>
+
 #if defined(ARCHITECTURE_AMD64)
 #include <nmmintrin.h>
 using v128 = __m128i;
