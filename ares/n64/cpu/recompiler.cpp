@@ -1,5 +1,5 @@
 auto CPU::Recompiler::pool(u32 address) -> Pool* {
-  auto& pool = pools[address >> 8 & 0x1fffff];
+  auto& pool = pools[address >> poolOffsetBits & poolIndexMask];
   if(!pool) {
     pool = (Pool*)allocator.acquire(sizeof(Pool));
     memory::jitprotect(false);
@@ -9,10 +9,16 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
   return pool;
 }
 
+auto CPU::Recompiler::computePoolOffset(u32 address, bool singleInstruction) -> int {
+  return address >> 2 & Pool::mask;
+}
+
 auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
-  if(auto block = pool(address)->blocks[address >> 2 & 0x3f]) return block;
+  //u64 key = computePoolKey(address, singleInstruction);
+  int offset = computePoolOffset(address, singleInstruction);
+  if(auto block = pool(address)->blocks[offset]) return block;
   auto block = emit(vaddr, address, singleInstruction);
-  pool(address)->blocks[address >> 2 & 0x3f] = block;
+  pool(address)->blocks[offset] = block;
   memory::jitprotect(true);
   return block;
 }

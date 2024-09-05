@@ -855,11 +855,13 @@ struct CPU : Thread {
     };
 
     struct Pool {
-      Block* blocks[1 << 6];
+      static constexpr size_t bits = 6;
+      static constexpr size_t mask = (1U << bits) - 1;
+      Block* blocks[1 << bits];
     };
 
     auto reset() -> void {
-      for(u32 index : range(1 << 21)) pools[index] = nullptr;
+      for(u32 index : range(1 << poolIndexBits)) pools[index] = nullptr;
     }
 
     auto invalidate(u32 address) -> void {
@@ -881,16 +883,17 @@ struct CPU : Thread {
     }
 
     auto invalidatePool(u32 address) -> void {
-      pools[address >> 8 & 0x1fffff] = nullptr;
+      pools[address >> poolOffsetBits & poolIndexMask] = nullptr;
     }
 
     auto invalidateRange(u32 address, u32 length) -> void {
-      for (u32 s = 0; s < length; s += 256)
+      for (u32 s = 0; s < length; s += (1 << poolOffsetBits))
         invalidatePool(address + s);
       invalidatePool(address + length - 1);
     }
 
     auto pool(u32 address) -> Pool*;
+    auto computePoolOffset(u32 address, bool singleInstruction) -> int;
     auto block(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
 
     auto emit(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
@@ -905,7 +908,11 @@ struct CPU : Thread {
     bool enabled = false;
     bool callInstructionPrologue = false;
     bump_allocator allocator;
-    Pool* pools[1 << 21];  //2_MiB * sizeof(void*) == 16_MiB
+
+    static constexpr size_t poolOffsetBits = 8;
+    static constexpr size_t poolIndexBits = 21;
+    static constexpr size_t poolIndexMask = (1U << poolIndexBits) - 1;
+    Pool* pools[1 << poolIndexBits];
   } recompiler{*this};
 
   struct Disassembler {
