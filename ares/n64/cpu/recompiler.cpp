@@ -9,16 +9,59 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
   return pool;
 }
 
-auto CPU::Recompiler::computePoolOffset(u32 address, bool singleInstruction) -> int {
-  return address >> 2 & Pool::mask;
+//auto CPU::Recompiler::entry(u32 address) -> Pool* {
+//  auto& pool = pools[address >> poolOffsetBits & poolIndexMask];
+//  if(!pool) {
+//    pool = (Pool*)allocator.acquire(sizeof(Pool));
+//    memory::jitprotect(false);
+//    *pool = {};
+//    memory::jitprotect(true);
+//  }
+//  return pool;
+//}
+
+namespace {
+// A rough but fast hash function by Jon Maiga
+// See https://jonkagstrom.com/bit-mixer-construction/
+u64 mxmHash(u64 x) {
+	x *= 0xbf58476d1ce4e5b9ull;
+	x ^= x >> 56;
+	x *= 0x94d049bb133111ebull;
+	return x;
+}
+}
+
+auto CPU::Recompiler::computePoolRow(u32 address, bool singleInstruction) -> u64 {
+  u64 key = address >> 2 & ((1ull<<6)-1);
+  //u64 offset = mxmHash(key) & ((1ull<<6)-1);
+  u64 row = mxmHash(key) & ((1ull<<6)-1);
+  //printf("address=0x%x, key=0x%lx, offset=0x%lx\n", address, key, offset);
+  assert(row < sizeof(Pool::entries)/sizeof(Pool::entries[0]));
+  return row;
 }
 
 auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
   //u64 key = computePoolKey(address, singleInstruction);
-  int offset = computePoolOffset(address, singleInstruction);
-  if(auto block = pool(address)->blocks[offset]) return block;
+  u64 row = computePoolRow(address, singleInstruction);
+  Pool* p = pool(address);
+  if (p->entries[row].tag == address) {
+    if (auto block = p->entries[row].block) {
+      return block;
+    }
+  } else {
+    if (p->entries[row].block) {
+      printf("conflict at 0x%x\n", address);
+    }
+  }
+
+  memory::jitprotect(false);
   auto block = emit(vaddr, address, singleInstruction);
-  pool(address)->blocks[offset] = block;
+  p->entries[row].block = block;
+  p->entries[row].tag = address;
+
+  //if(auto block = pool(address)->blocks[offset]) return block;
+  //auto block = emit(vaddr, address, singleInstruction);
+  //pool(address)->blocks[offset] = block;
   memory::jitprotect(true);
   return block;
 }

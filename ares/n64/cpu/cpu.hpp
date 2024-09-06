@@ -855,9 +855,14 @@ struct CPU : Thread {
     };
 
     struct Pool {
-      static constexpr size_t bits = 6;
-      static constexpr size_t mask = (1U << bits) - 1;
-      Block* blocks[1 << bits];
+      struct Entry {
+        Block* block;
+        u32 tag;
+      };
+      //static constexpr size_t bits = 7;
+      //static constexpr size_t mask = (1U << bits) - 1;
+      //Block* blocks[1 << 6];
+      Entry entries[1 << 6];
     };
 
     auto reset() -> void {
@@ -893,7 +898,8 @@ struct CPU : Thread {
     }
 
     auto pool(u32 address) -> Pool*;
-    auto computePoolOffset(u32 address, bool singleInstruction) -> int;
+    // auto entry(u32 address) -> Entry*;
+    auto computePoolRow(u32 address, bool singleInstruction) -> u64;
     auto block(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
 
     auto emit(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
