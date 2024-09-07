@@ -85,7 +85,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, JITContext ctx) -> Block* {
       mov32(reg(2), imm(instruction));
       call(&CPU::instructionPrologue);
     }
-    bool branched = emitEXECUTE(instruction);
+    bool branched = emitEXECUTE(instruction, ctx);
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
       //accelerate idle loops
       mov32(reg(1), imm(64 * 2));
@@ -142,12 +142,12 @@ auto CPU::Recompiler::emitZeroClear(u32 n) -> void {
   if(n == 0) mov64(mem(IpuReg(r[0])), imm(0));
 }
 
-auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
+auto CPU::Recompiler::emitEXECUTE(u32 instruction, JITContext ctx) -> bool {
   switch(instruction >> 26) {
 
   //SPECIAL
   case 0x00: {
-    return emitSPECIAL(instruction);
+    return emitSPECIAL(instruction, ctx.mode == Context::Mode::Kernel, ctx.bits64 ? 64 : 32);
   }
 
   //REGIMM
@@ -655,7 +655,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
   return 0;
 }
 
-auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
+auto CPU::Recompiler::emitSPECIAL(u32 instruction, bool kernelMode, u32 bits) -> bool {
   switch(instruction & 0x3f) {
 
   //SLL Rd,Rt,Sa
@@ -999,11 +999,20 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DADDU Rd,Rs,Rt
   case 0x2d: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DADDU);
-    emitZeroClear(Rdn);
+    // Below implements CPU::DADDU
+    // if(!context.kernelMode() && context.bits == 32) return exception.reservedInstruction();
+    // rd.u64 = rs.u64 + rt.u64;
+
+    if(Rdn == 0) return 0;
+
+    if (!kernelMode && bits == 32) {
+      call(&CPU::Exception::reservedInstruction, &self.exception);
+      return 1; //TODO which return value for branch?
+    } else {
+      add64(reg(0), mem(Rs), mem(Rt));
+      mov64(mem(Rd), reg(0));
+    }
+
     return 0;
   }
 

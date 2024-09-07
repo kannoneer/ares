@@ -910,8 +910,8 @@ struct CPU : Thread {
 
     auto emit(u64 vaddr, u32 address, JITContext ctx) -> Block*;
     auto emitZeroClear(u32 n) -> void;
-    auto emitEXECUTE(u32 instruction) -> bool;
-    auto emitSPECIAL(u32 instruction) -> bool;
+    auto emitEXECUTE(u32 instruction, JITContext ctx) -> bool;
+    auto emitSPECIAL(u32 instruction, bool kernelMode, u32 bits) -> bool;
     auto emitREGIMM(u32 instruction) -> bool;
     auto emitSCC(u32 instruction) -> bool;
     auto emitFPU(u32 instruction) -> bool;
