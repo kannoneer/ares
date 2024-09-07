@@ -110,7 +110,15 @@ auto CPU::instruction() -> void {
 
   if(Accuracy::CPU::Recompiler && recompiler.enabled) {
     if (auto address = devirtualize(ipu.pc)) {
-      auto block = recompiler.block(ipu.pc, *address, GDB::server.hasBreakpoints());
+      auto block = recompiler.block(ipu.pc, *address, 
+        {
+        .singleInstruction = GDB::server.hasBreakpoints(),
+        .endian = Context::Endian(context.endian),
+        .mode = Context::Mode(context.mode),
+        .cop1Enabled = scc.status.enable.coprocessor1 > 0,
+        .floatingPointMode = scc.status.floatingPointMode > 0,
+        .bits64 = context.bits == 64,
+        });
       block->execute(*this);
     }
   } else {

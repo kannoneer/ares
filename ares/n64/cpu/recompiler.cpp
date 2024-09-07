@@ -9,17 +9,6 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
   return pool;
 }
 
-//auto CPU::Recompiler::entry(u32 address) -> Pool* {
-//  auto& pool = pools[address >> poolOffsetBits & poolIndexMask];
-//  if(!pool) {
-//    pool = (Pool*)allocator.acquire(sizeof(Pool));
-//    memory::jitprotect(false);
-//    *pool = {};
-//    memory::jitprotect(true);
-//  }
-//  return pool;
-//}
-
 namespace {
 // A rough but fast hash function by Jon Maiga
 // See https://jonkagstrom.com/bit-mixer-construction/
@@ -31,18 +20,23 @@ u64 mxmHash(u64 x) {
 }
 }
 
-auto CPU::Recompiler::computePoolRow(u32 address, bool singleInstruction) -> u64 {
+auto CPU::Recompiler::computePoolRow(u32 address, JITContext ctx) -> u64 {
   u64 key = address >> 2 & ((1ull<<6)-1);
-  //u64 offset = mxmHash(key) & ((1ull<<6)-1);
-  u64 row = mxmHash(key) & ((1ull<<6)-1);
-  //printf("address=0x%x, key=0x%lx, offset=0x%lx\n", address, key, offset);
+  key |= ctx.singleInstruction ? 1 << 6 : 0;
+  key |= ctx.endian ? 1 << 7 : 0;
+  key |= (ctx.mode & 0x03) << 9;
+  key |= ctx.cop1Enabled ? 1 << 10 : 0;
+  key |= ctx.floatingPointMode ? 1 << 11 : 0;
+  key |= ctx.bits64 ? 1 << 12 : 0;
+  u64 row = mxmHash(key) & ((1ull<<7)-1);
+  //printf("address=0x%x, key=0x%lx, row=0x%lx\n", address, key, row);
   assert(row < sizeof(Pool::entries)/sizeof(Pool::entries[0]));
   return row;
 }
 
-auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
+auto CPU::Recompiler::block(u64 vaddr, u32 address, JITContext ctx) -> Block* {
   //u64 key = computePoolKey(address, singleInstruction);
-  u64 row = computePoolRow(address, singleInstruction);
+  u64 row = computePoolRow(address, ctx);
   Pool* p = pool(address);
   if (p->entries[row].tag == address) {
     if (auto block = p->entries[row].block) {
@@ -50,18 +44,14 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> B
     }
   } else {
     if (p->entries[row].block) {
-      printf("conflict at 0x%x\n", address);
+      // printf("conflict at 0x%x\n", address);
     }
   }
 
   memory::jitprotect(false);
-  auto block = emit(vaddr, address, singleInstruction);
+  auto block = emit(vaddr, address, ctx);
   p->entries[row].block = block;
   p->entries[row].tag = address;
-
-  //if(auto block = pool(address)->blocks[offset]) return block;
-  //auto block = emit(vaddr, address, singleInstruction);
-  //pool(address)->blocks[offset] = block;
   memory::jitprotect(true);
   return block;
 }
@@ -70,7 +60,7 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> B
 #define IpuReg(r)      sreg(1), offsetof(IPU, r) - IpuBase
 #define PipelineReg(x) mem(sreg(0), offsetof(CPU, pipeline) + offsetof(Pipeline, x))
 
-auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
+auto CPU::Recompiler::emit(u64 vaddr, u32 address, JITContext ctx) -> Block* {
   if(unlikely(allocator.available() < 1_MiB)) {
     print("CPU allocator flush\n");
     allocator.release();
@@ -109,7 +99,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
     vaddr += 4;
     address += 4;
     jumpToSelf += 4;
-    if(hasBranched || (address & 0xfc) == 0 || singleInstruction) break;  //block boundary
+    if(hasBranched || (address & 0xfc) == 0 || ctx.singleInstruction) break;  //block boundary
     hasBranched = branched;
     jumpEpilog(flag_nz);
   }

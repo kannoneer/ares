@@ -859,10 +859,16 @@ struct CPU : Thread {
         Block* block;
         u32 tag;
       };
-      //static constexpr size_t bits = 7;
-      //static constexpr size_t mask = (1U << bits) - 1;
-      //Block* blocks[1 << 6];
-      Entry entries[1 << 6];
+      Entry entries[1 << 7];
+    };
+
+    struct JITContext {
+      bool singleInstruction;
+      Context::Endian endian;
+      Context::Mode mode;
+      bool cop1Enabled;
+      bool floatingPointMode;
+      bool bits64;
     };
 
     auto reset() -> void {
@@ -899,10 +905,10 @@ struct CPU : Thread {
 
     auto pool(u32 address) -> Pool*;
     // auto entry(u32 address) -> Entry*;
-    auto computePoolRow(u32 address, bool singleInstruction) -> u64;
-    auto block(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
+    auto computePoolRow(u32 address, JITContext ctx) -> u64;
+    auto block(u64 vaddr, u32 address, JITContext ctx) -> Block*;
 
-    auto emit(u64 vaddr, u32 address, bool singleInstruction = false) -> Block*;
+    auto emit(u64 vaddr, u32 address, JITContext ctx) -> Block*;
     auto emitZeroClear(u32 n) -> void;
     auto emitEXECUTE(u32 instruction) -> bool;
     auto emitSPECIAL(u32 instruction) -> bool;
