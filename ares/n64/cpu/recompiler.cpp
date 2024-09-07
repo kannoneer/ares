@@ -142,6 +142,25 @@ auto CPU::Recompiler::emitZeroClear(u32 n) -> void {
   if(n == 0) mov64(mem(IpuReg(r[0])), imm(0));
 }
 
+auto CPU::Recompiler::emitOverflowCheck(reg temp) -> sljit_jump* {
+    // If overflow flag set: throw an exception, skip the instruction via the 'end' label.
+    mov32_f(temp, flag_o);
+    auto didntOverflow = cmp32_jump(temp, imm(0), flag_eq);
+    call(&CPU::Exception::arithmeticOverflow, &cpu.exception);
+    auto end = jump();
+    setLabel(didntOverflow);
+    return end;
+}
+
+auto CPU::Recompiler::checkDoublesLegal(bool kernelMode, u32 bits) -> bool {
+  if (!kernelMode && bits == 32) {
+    call(&CPU::Exception::reservedInstruction, &self.exception);
+    return false;
+  }
+
+  return true;
+}
+
 auto CPU::Recompiler::emitEXECUTE(u32 instruction, JITContext ctx) -> bool {
   switch(instruction >> 26) {
 
@@ -989,30 +1008,27 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction, bool kernelMode, u32 bits) ->
 
   //DADD Rd,Rs,Rt
   case 0x2c: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DADD);
-    emitZeroClear(Rdn);
+    if (!checkDoublesLegal(kernelMode, bits)) {
+      return 1;
+    }
+
+    add64(reg(0), mem(Rs), mem(Rt), set_o);
+    auto skip = emitOverflowCheck(reg(2));
+    if(Rdn > 0) mov64(mem(Rd), reg(0));
+    setLabel(skip);
     return 0;
   }
 
   //DADDU Rd,Rs,Rt
   case 0x2d: {
-    // Below implements CPU::DADDU
-    // if(!context.kernelMode() && context.bits == 32) return exception.reservedInstruction();
-    // rd.u64 = rs.u64 + rt.u64;
+    if (!checkDoublesLegal(kernelMode, bits)) {
+      return 1;
+    }
 
     if(Rdn == 0) return 0;
 
-    if (!kernelMode && bits == 32) {
-      call(&CPU::Exception::reservedInstruction, &self.exception);
-      return 1; //TODO which return value for branch?
-    } else {
-      add64(reg(0), mem(Rs), mem(Rt));
-      mov64(mem(Rd), reg(0));
-    }
-
+    add64(reg(0), mem(Rs), mem(Rt));
+    mov64(mem(Rd), reg(0));
     return 0;
   }
 

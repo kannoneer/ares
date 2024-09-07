@@ -909,7 +909,9 @@ struct CPU : Thread {
     auto block(u64 vaddr, u32 address, JITContext ctx) -> Block*;
 
     auto emit(u64 vaddr, u32 address, JITContext ctx) -> Block*;
+    auto emitOverflowCheck(reg temp) -> sljit_jump*;
     auto emitZeroClear(u32 n) -> void;
+    auto checkDoublesLegal(bool kernelMode, u32 bits) -> bool;
     auto emitEXECUTE(u32 instruction, JITContext ctx) -> bool;
     auto emitSPECIAL(u32 instruction, bool kernelMode, u32 bits) -> bool;
     auto emitREGIMM(u32 instruction) -> bool;
