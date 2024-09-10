@@ -9,10 +9,34 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
   return pool;
 }
 
-auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
-  if(auto block = pool(address)->blocks[address >> 2 & 0x3f]) return block;
-  auto block = emit(vaddr, address, singleInstruction);
-  pool(address)->blocks[address >> 2 & 0x3f] = block;
+auto CPU::Recompiler::computePoolKey(u32 address, u32 jitBits) -> u32 {
+  return (address >> 2 & 0x3f) | (jitBits & ~0x3f);
+}
+
+auto CPU::Recompiler::computePoolRow(u32 key) -> u32 {
+  // Jon Maiga's 'xmx' mixer, see https://jonkagstrom.com/bit-mixer-construction/
+  u64 x = key;
+  x ^= x >> 23;
+  x *= 0xff51afd7ed558ccdull;
+  x ^= x >> 23;
+  u32 row = x & 0x3f;
+  assert(row < sizeof(Pool::rows)/sizeof(Pool::rows[0]));
+  return row;
+}
+
+auto CPU::Recompiler::block(u64 vaddr, u32 address, const Context& ctx) -> Block* {
+  u32 key = computePoolKey(address, ctx.jitBits);
+  u32 row = computePoolRow(key);
+
+  if (pool(address)->rows[row].tag == key) {
+    if (auto block = pool(address)->rows[row].block) {
+      return block;
+    }
+  }
+
+  memory::jitprotect(false);
+  auto block = emit(vaddr, address, ctx.jit);
+  pool(address)->rows[row] = {.block = block, .tag = key};
   memory::jitprotect(true);
   return block;
 }
@@ -21,7 +45,7 @@ auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> B
 #define IpuReg(r)      sreg(1), offsetof(IPU, r) - IpuBase
 #define PipelineReg(x) mem(sreg(0), offsetof(CPU, pipeline) + offsetof(Pipeline, x))
 
-auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
+auto CPU::Recompiler::emit(u64 vaddr, u32 address, Context::JIT ctx) -> Block* {
   if(unlikely(allocator.available() < 1_MiB)) {
     print("CPU allocator flush\n");
     allocator.release();
@@ -46,7 +70,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
       mov32(reg(2), imm(instruction));
       call(&CPU::instructionPrologue);
     }
-    bool branched = emitEXECUTE(instruction);
+    bool branched = emitEXECUTE(instruction, ctx);
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
       //accelerate idle loops
       mov32(reg(1), imm(64 * 2));
@@ -60,7 +84,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
     vaddr += 4;
     address += 4;
     jumpToSelf += 4;
-    if(hasBranched || (address & 0xfc) == 0 || singleInstruction) break;  //block boundary
+    if(hasBranched || (address & 0xfc) == 0 || ctx.singleInstruction) break;  //block boundary
     hasBranched = branched;
     jumpEpilog(flag_nz);
   }
