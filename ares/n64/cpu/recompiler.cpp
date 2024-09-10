@@ -127,12 +127,31 @@ auto CPU::Recompiler::emitZeroClear(u32 n) -> void {
   if(n == 0) mov64(mem(IpuReg(r[0])), imm(0));
 }
 
-auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
+auto CPU::Recompiler::emitOverflowCheck(reg temp) -> sljit_jump* {
+    // If overflow flag set: throw an exception, skip the instruction via the 'end' label.
+    mov32_f(temp, flag_o);
+    auto didntOverflow = cmp32_jump(temp, imm(0), flag_eq);
+    call(&CPU::Exception::arithmeticOverflow, &cpu.exception);
+    auto end = jump();
+    setLabel(didntOverflow);
+    return end;
+}
+
+auto CPU::Recompiler::checkDualAllowed(const Context::JIT& ctx) -> bool {
+  if (ctx.mode != Context::Mode::Kernel && !ctx.is64bit) {
+    call(&CPU::Exception::reservedInstruction, &self.exception);
+    return false;
+  }
+
+  return true;
+}
+
+auto CPU::Recompiler::emitEXECUTE(u32 instruction, Context::JIT ctx) -> bool {
   switch(instruction >> 26) {
 
   //SPECIAL
   case 0x00: {
-    return emitSPECIAL(instruction);
+    return emitSPECIAL(instruction, ctx);
   }
 
   //REGIMM
@@ -308,21 +327,19 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //DADDI Rt,Rs,i16
   case 0x18: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::DADDI);
-    emitZeroClear(Rtn);
+    if (!checkDualAllowed(ctx)) return 1;
+    add64(reg(0), mem(Rs), imm(i16), set_o);
+    auto skip = emitOverflowCheck(reg(2));
+    if(Rtn > 0) mov64(mem(Rt), reg(0));
+    setLabel(skip);
     return 0;
   }
 
   //DADDIU Rt,Rs,i16
   case 0x19: {
-    lea(reg(1), Rt);
-    lea(reg(2), Rs);
-    mov32(reg(3), imm(i16));
-    call(&CPU::DADDIU);
-    emitZeroClear(Rtn);
+    if (!checkDualAllowed(ctx)) return 1;
+    add64(reg(0), mem(Rs), imm(i16), set_o);
+    if(Rtn > 0) mov64(mem(Rt), reg(0));
     return 0;
   }
 
@@ -640,7 +657,7 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
   return 0;
 }
 
-auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
+auto CPU::Recompiler::emitSPECIAL(u32 instruction, Context::JIT ctx) -> bool {
   switch(instruction & 0x3f) {
 
   //SLL Rd,Rt,Sa
@@ -784,11 +801,10 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSLLV Rd,Rt,Rs
   case 0x14: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    lea(reg(3), Rs);
-    call(&CPU::DSLLV);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    and64(reg(0), mem(Rs32), imm(63));
+    shl64(mem(Rd), mem(Rt), reg(0));
     return 0;
   }
 
@@ -800,21 +816,19 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSRLV Rd,Rt,Rs
   case 0x16: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    lea(reg(3), Rs);
-    call(&CPU::DSRLV);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    and64(reg(0), mem(Rs32), imm(63));
+    lshr64(mem(Rd), mem(Rt), reg(0));
     return 0;
   }
 
   //DSRAV Rd,Rt,Rs
   case 0x17: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    lea(reg(3), Rs);
-    call(&CPU::DSRAV);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    and64(reg(0), mem(Rs32), imm(63));
+    ashr64(mem(Rd), mem(Rt), reg(0));
     return 0;
   }
 
@@ -974,41 +988,42 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DADD Rd,Rs,Rt
   case 0x2c: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DADD);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    add64(reg(0), mem(Rs), mem(Rt), set_o);
+    auto skip = emitOverflowCheck(reg(2));
+    if(Rdn > 0) mov64(mem(Rd), reg(0));
+    setLabel(skip);
     return 0;
   }
 
   //DADDU Rd,Rs,Rt
   case 0x2d: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DADDU);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) {
+      return 1;
+    }
+
+    if(Rdn == 0) return 0;
+
+    add64(reg(0), mem(Rs), mem(Rt));
+    mov64(mem(Rd), reg(0));
     return 0;
   }
 
   //DSUB Rd,Rs,Rt
   case 0x2e: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DSUB);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    sub64(reg(0), mem(Rs), mem(Rt), set_o);
+    auto skip = emitOverflowCheck(reg(2));
+    if(Rdn > 0) mov64(mem(Rd), reg(0));
+    setLabel(skip);
     return 0;
   }
 
   //DSUBU Rd,Rs,Rt
   case 0x2f: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rs);
-    lea(reg(3), Rt);
-    call(&CPU::DSUBU);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    sub64(reg(0), mem(Rs), mem(Rt), set_o);
+    if(Rdn > 0) mov64(mem(Rd), reg(0));
     return 0;
   }
 
@@ -1074,11 +1089,9 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSLL Rd,Rt,Sa
   case 0x38: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(Sa));
-    call(&CPU::DSLL);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    shl64(mem(Rd), mem(Rt), imm(Sa));
     return 0;
   }
 
@@ -1100,21 +1113,17 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSRA Rd,Rt,Sa
   case 0x3b: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(Sa));
-    call(&CPU::DSRA);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    ashr64(mem(Rd), mem(Rt), imm(Sa));
     return 0;
   }
 
   //DSLL32 Rd,Rt,Sa
   case 0x3c: {
-    lea(reg(1), Rd);
-    lea(reg(2), Rt);
-    mov32(reg(3), imm(Sa+32));
-    call(&CPU::DSLL);
-    emitZeroClear(Rdn);
+    if (!checkDualAllowed(ctx)) return 1;
+    if (Rdn == 0) return 0;
+    shl64(mem(Rd), mem(Rt), imm(Sa+32));
     return 0;
   }
 

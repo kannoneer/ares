@@ -922,9 +922,11 @@ struct CPU : Thread {
     auto block(u64 vaddr, u32 address, const Context& ctx) -> Block*;
 
     auto emit(u64 vaddr, u32 address, Context::JIT ctx) -> Block*;
+    auto emitOverflowCheck(reg temp) -> sljit_jump*;
     auto emitZeroClear(u32 n) -> void;
-    auto emitEXECUTE(u32 instruction) -> bool;
-    auto emitSPECIAL(u32 instruction) -> bool;
+    auto checkDualAllowed(const Context::JIT& ctx) -> bool;
+    auto emitEXECUTE(u32 instruction, Context::JIT ctx) -> bool;
+    auto emitSPECIAL(u32 instruction, Context::JIT ctx) -> bool;
     auto emitREGIMM(u32 instruction) -> bool;
     auto emitSCC(u32 instruction) -> bool;
     auto emitFPU(u32 instruction) -> bool;
