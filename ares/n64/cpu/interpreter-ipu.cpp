@@ -466,45 +466,13 @@ auto CPU::LDL(r64& rt, cr64& rs, s16 imm) -> void {
     break;
   }
 
-  if(context.bigEndian())
-  switch(vaddr & 7) {
-  case 0:
-    data &= 0x0000000000000000ull;
-    if(auto dual = read<Dual>(vaddr & ~7 | 0)) data |= dual() <<  0; else return;
-    break;
-  case 1:
-    data &= 0x00000000000000ffull;
-    if(auto byte = read<Byte>(vaddr & ~7 | 1)) data |= byte() << 56; else return;
-    if(auto half = read<Half>(vaddr & ~7 | 2)) data |= half() << 40; else return;
-    if(auto word = read<Word>(vaddr & ~7 | 4)) data |= word() <<  8; else return;
-    break;
-  case 2:
-    data &= 0x000000000000ffffull;
-    if(auto half = read<Half>(vaddr & ~7 | 2)) data |= half() << 48; else return;
-    if(auto word = read<Word>(vaddr & ~7 | 4)) data |= word() << 16; else return;
-    break;
-  case 3:
-    data &= 0x0000000000ffffffull;
-    if(auto byte = read<Byte>(vaddr & ~7 | 3)) data |= byte() << 56; else return;
-    if(auto word = read<Word>(vaddr & ~7 | 4)) data |= word() << 24; else return;
-    break;
-  case 4:
-    data &= 0x00000000ffffffffull;
-    if(auto word = read<Word>(vaddr & ~7 | 4)) data |= word() << 32; else return;
-    break;
-  case 5:
-    data &= 0x000000ffffffffffull;
-    if(auto byte = read<Byte>(vaddr & ~7 | 5)) data |= byte() << 56; else return;
-    if(auto half = read<Half>(vaddr & ~7 | 6)) data |= half() << 40; else return;
-    break;
-  case 6:
-    data &= 0x0000ffffffffffffull;
-    if(auto half = read<Half>(vaddr & ~7 | 6)) data |= half() << 48; else return;
-    break;
-  case 7:
-    data &= 0x00ffffffffffffffull;
-    if(auto byte = read<Byte>(vaddr & ~7 | 7)) data |= byte() << 56; else return;
-    break;
+  if (context.bigEndian()) {
+    auto mem = read<Dual>(vaddr & ~7);
+    if (!mem) return;
+    u64 shift = (vaddr & 7) << 3;
+    u64 mask = (shift == 0) ? 0 : 0xffffffffffffffffull >> (64 - shift);
+    data &= mask;
+    data |= (mem() << shift) & ~mask;
   }
 
   rt.u64 = data;
