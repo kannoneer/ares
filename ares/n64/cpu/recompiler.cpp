@@ -1,3 +1,108 @@
+#include <cstdint>
+#include <chrono>
+#include <cstdlib>
+
+#define PROF_BEGIN(name) call(&Profiler::begin, &profiler, name, __LINE__);
+#define PROF_END(name) call(&Profiler::end, &profiler, name);
+
+namespace {
+struct Profiler {
+  enum Name : int {
+    TOTAL=0,
+    FPU,
+    MATHS,
+    //MULT,
+    //DIV,
+    LOAD,
+    STORE,
+    BRANCH,
+    MOVE,
+    SCC,
+    IDLE_SKIP,
+    EPILOGUE,
+    COP2,
+    COP3,
+    TRAP,
+    NUM_SECTIONS,
+  };
+  const char* sectionNames[NUM_SECTIONS] = {
+    "TOTAL",
+    "FPU",
+    "MATHS",
+    //"  MULT",
+    //"  DIV",
+    "LOAD",
+    "STORE",
+    "BRANCH",
+    "MOVE",
+    "SCC",
+    "IDLE_SKIP",
+    "EPILOGUE",
+    "COP2",
+    "COP3",
+    "TRAP",
+  };
+  struct Section {
+    const char* name;
+    uint64_t numCalls;
+    uint64_t nanoSum;
+    std::chrono::time_point<std::chrono::high_resolution_clock> timeStart;
+    bool open;
+    int lastline;
+  };
+
+  Section sections[NUM_SECTIONS]{};
+  //std::chrono::time_point<std::chrono::high_resolution_clock> started{};
+  uint64_t totalCalls = 0;
+
+  void begin(int section, int line) {
+    sections[section].timeStart = std::chrono::high_resolution_clock::now();
+    if (sections[section].open) {
+      printf("Section %d = %s was already open from line %d\n", section, sectionNames[section], sections[section].lastline);
+      exit(1);
+    }
+    sections[section].open = true;
+    sections[section].lastline = line;
+    totalCalls++;
+  }
+
+  void end(int section) {
+    auto took = std::chrono::duration<uint64_t, std::nano>(std::chrono::high_resolution_clock::now() - sections[section].timeStart);
+    sections[section].nanoSum += took.count();
+    sections[section].numCalls++;
+    sections[section].open = false;
+    if (section == TOTAL && totalCalls >= 500'000'000ul) {
+      show();
+      exit(1);
+    }
+  }
+
+  void show() {
+    uint64_t all = 0;
+    for (int i=0;i<Profiler::Name::NUM_SECTIONS;i++) {
+      if (sections[i].open) {
+        printf("Section %d = %s was open at end\n", i, sectionNames[i]);
+        exit(1);
+      }
+      if (sectionNames[i][0] != ' ' && i != TOTAL) { // only high-level sections count
+        all += sections[i].nanoSum;
+      }
+    }
+    for (int i=1;i<Profiler::Name::NUM_SECTIONS;i++) {
+      // double totalRatio = sections[i].nanoSum / (double)sections[TOTAL].nanoSum;
+      double allRatio = sections[i].nanoSum / (double)all;
+      printf("[%2d] %-16s count=%'-8lu time=%'-10lu ns (%-8.3f %%)\n", i, sectionNames[i], sections[i].numCalls, sections[i].nanoSum, allRatio*100);
+    }
+    uint64_t missing = (sections[TOTAL].nanoSum - all);
+    double missingRatio = missing / (double)sections[TOTAL].nanoSum;
+    printf("\n");
+    printf("Total block execution time:    %.5f s\n", sections[TOTAL].nanoSum / 1e9);
+    printf("Summed section execution time: %.5f s\n", all / 1e9);
+    printf("Unaccounted for:               %.5f s (%.3f %%)\n", missing / 1e9, missingRatio * 100);
+  }
+} profiler;
+}
+
 auto CPU::Recompiler::pool(u32 address) -> Pool* {
   auto& pool = pools[address >> 8 & 0x1fffff];
   if(!pool) {
@@ -36,6 +141,8 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
   constexpr u32 branchToSelf = 0x1000'ffff;  //beq 0,0,<pc>
   u32 jumpToSelf = 2 << 26 | vaddr >> 2 & 0x3ff'ffff;  //j <pc>
   while(true) {
+    PROF_BEGIN(Profiler::Name::TOTAL);
+
     u32 instruction = bus.read<Word>(address, thread, "Ares Recompiler");
     mov32(PipelineReg(nstate), imm(0));
     mov64(reg(0), PipelineReg(nextpc));
@@ -46,16 +153,25 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
       mov32(reg(2), imm(instruction));
       call(&CPU::instructionPrologue);
     }
+
     bool branched = emitEXECUTE(instruction);
+
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
+      PROF_BEGIN(Profiler::Name::IDLE_SKIP);
       //accelerate idle loops
       mov32(reg(1), imm(64 * 2));
       call(&CPU::step);
+      PROF_END(Profiler::Name::IDLE_SKIP);
     }
+    call(&Profiler::end, &profiler, Profiler::Name::TOTAL);
+
+    PROF_BEGIN(Profiler::Name::EPILOGUE);
     call(&CPU::instructionEpilogue<1>);
     test32(PipelineReg(state), imm(Pipeline::EndBlock), set_z);
     mov32(PipelineReg(state), PipelineReg(nstate));
     mov64(mem(IpuReg(pc)), PipelineReg(pc));
+    PROF_END(Profiler::Name::EPILOGUE);
+    PROF_END(Profiler::Name::TOTAL);
 
     vaddr += 4;
     address += 4;
@@ -108,217 +224,275 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //SPECIAL
   case 0x00: {
-    return emitSPECIAL(instruction);
+    bool ret = emitSPECIAL(instruction);
+    return ret;
   }
 
   //REGIMM
   case 0x01: {
-    return emitREGIMM(instruction);
+    bool ret = emitREGIMM(instruction);
+    return ret;
   }
 
   //J n26
   case 0x02: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     mov32(reg(1), imm(n26));
     call(&CPU::J);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //JAL n26
   case 0x03: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     mov32(reg(1), imm(n26));
     call(&CPU::JAL);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BEQ Rs,Rt,i16
   case 0x04: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     mov32(reg(3), imm(i16));
     call(&CPU::BEQ);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BNE Rs,Rt,i16
   case 0x05: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     mov32(reg(3), imm(i16));
     call(&CPU::BNE);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BLEZ Rs,i16
   case 0x06: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLEZ);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BGTZ Rs,i16
   case 0x07: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGTZ);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //ADDI Rt,Rs,i16
   case 0x08: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::ADDI);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //ADDIU Rt,Rs,i16
   case 0x09: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     add32(reg(0), mem(Rs32), imm(i16));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rt), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SLTI Rt,Rs,i16
   case 0x0a: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MOVE);
     cmp64(mem(Rs), imm(i16), set_slt);
     mov64_f(mem(Rt), flag_slt);
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //SLTIU Rt,Rs,i16
   case 0x0b: {
+    PROF_BEGIN(Profiler::Name::MOVE);
     if(Rtn == 0) return 0;
     cmp64(mem(Rs), imm(i16), set_ult);
     mov64_f(mem(Rt), flag_ult);
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //ANDI Rt,Rs,n16
   case 0x0c: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     and64(mem(Rt), mem(Rs), imm(n16));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //ORI Rt,Rs,n16
   case 0x0d: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     or64(mem(Rt), mem(Rs), imm(n16));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //XORI Rt,Rs,n16
   case 0x0e: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     xor64(mem(Rt), mem(Rs), imm(n16));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //LUI Rt,n16
   case 0x0f: {
     if(Rtn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::LOAD);
     mov64(mem(Rt), imm(s32(n16 << 16)));
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //SCC
   case 0x10: {
-    return emitSCC(instruction);
+    PROF_BEGIN(Profiler::Name::SCC);
+    bool ret = emitSCC(instruction);
+    PROF_END(Profiler::Name::SCC);
+    return ret;
   }
 
   //FPU
   case 0x11: {
-    return emitFPU(instruction);
+
+    PROF_BEGIN(Profiler::Name::FPU);
+    bool ret = emitFPU(instruction);
+    PROF_END(Profiler::Name::FPU);
+    return ret;
   }
 
   //COP2
   case 0x12: {
-    return emitCOP2(instruction);
+    PROF_BEGIN(Profiler::Name::COP2);
+    bool ret = emitCOP2(instruction);
+    PROF_END(Profiler::Name::COP2);
+    return ret;
   }
 
   //COP3
   case 0x13: {
+    PROF_BEGIN(Profiler::Name::COP3);
     call(&CPU::COP3);
+    PROF_END(Profiler::Name::COP3);
     return 1;
   }
 
   //BEQL Rs,Rt,i16
   case 0x14: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     mov32(reg(3), imm(i16));
     call(&CPU::BEQL);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BNEL Rs,Rt,i16
   case 0x15: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     mov32(reg(3), imm(i16));
     call(&CPU::BNEL);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BLEZL Rs,i16
   case 0x16: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLEZL);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //BGTZL Rs,i16
   case 0x17: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGTZL);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //DADDI Rt,Rs,i16
   case 0x18: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::DADDI);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DADDIU Rt,Rs,i16
   case 0x19: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::DADDIU);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //LDL Rt,Rs,i16
   case 0x1a: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LDL);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LDR Rt,Rs,i16
   case 0x1b: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LDR);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
@@ -330,144 +504,174 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LB Rt,Rs,i16
   case 0x20: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LB);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LH Rt,Rs,i16
   case 0x21: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LH);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LWL Rt,Rs,i16
   case 0x22: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWL);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LW Rt,Rs,i16
   case 0x23: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LW);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LBU Rt,Rs,i16
   case 0x24: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LBU);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LHU Rt,Rs,i16
   case 0x25: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LHU);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LWR Rt,Rs,i16
   case 0x26: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWR);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LWU Rt,Rs,i16
   case 0x27: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWU);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //SB Rt,Rs,i16
   case 0x28: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SB);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SH Rt,Rs,i16
   case 0x29: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SH);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SWL Rt,Rs,i16
   case 0x2a: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SWL);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SW Rt,Rs,i16
   case 0x2b: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SW);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SDL Rt,Rs,i16
   case 0x2c: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SDL);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SDR Rt,Rs,i16
   case 0x2d: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SDR);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SWR Rt,Rs,i16
   case 0x2e: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SWR);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
@@ -482,20 +686,24 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LL Rt,Rs,i16
   case 0x30: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LL);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LWC1 Ft,Rs,i16
   case 0x31: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     mov32(reg(1), imm(Ftn));
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LWC1);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
@@ -507,26 +715,32 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LWC3
   case 0x33: {
+    PROF_BEGIN(Profiler::Name::COP3);
     call(&CPU::COP3);
+    PROF_END(Profiler::Name::COP3);
     return 1;
   }
 
   //LLD Rt,Rs,i16
   case 0x34: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LLD);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //LDC1 Ft,Rs,i16
   case 0x35: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     mov32(reg(1), imm(Ftn));
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LDC1);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
@@ -538,30 +752,36 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //LD Rt,Rs,i16
   case 0x37: {
+    PROF_BEGIN(Profiler::Name::LOAD);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::LD);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::LOAD);
     return 0;
   }
 
   //SC Rt,Rs,i16
   case 0x38: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SC);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SWC1 Ft,Rs,i16
   case 0x39: {
+    PROF_BEGIN(Profiler::Name::STORE);
     mov32(reg(1), imm(Ftn));
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SWC1);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
@@ -573,26 +793,32 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //SWC3
   case 0x3b: {
+    PROF_BEGIN(Profiler::Name::COP3);
     call(&CPU::COP3);
+    PROF_END(Profiler::Name::COP3);
     return 1;
   }
 
   //SCD Rt,Rs,i16
   case 0x3c: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SCD);
     emitZeroClear(Rtn);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
   //SDC1 Ft,Rs,i16
   case 0x3d: {
+    PROF_BEGIN(Profiler::Name::STORE);
     mov32(reg(1), imm(Ftn));
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SDC1);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
@@ -604,10 +830,12 @@ auto CPU::Recompiler::emitEXECUTE(u32 instruction) -> bool {
 
   //SD Rt,Rs,i16
   case 0x3f: {
+    PROF_BEGIN(Profiler::Name::STORE);
     lea(reg(1), Rt);
     lea(reg(2), Rs);
     mov32(reg(3), imm(i16));
     call(&CPU::SD);
+    PROF_END(Profiler::Name::STORE);
     return 0;
   }
 
@@ -622,9 +850,11 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   //SLL Rd,Rt,Sa
   case 0x00: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     shl32(reg(0), mem(Rt32), imm(Sa));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -637,27 +867,33 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   //SRL Rd,Rt,Sa
   case 0x02: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     lshr32(reg(0), mem(Rt32), imm(Sa));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SRA Rd,Rt,Sa
   case 0x03: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     ashr64(reg(0), mem(Rt), imm(Sa));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SLLV Rd,Rt,Rs
   case 0x04: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     mshl32(reg(0), mem(Rt32), mem(Rs32));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -670,35 +906,43 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   //SRLV Rd,Rt,RS
   case 0x06: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     mlshr32(reg(0), mem(Rt32), mem(Rs32));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SRAV Rd,Rt,Rs
   case 0x07: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     and64(reg(1), mem(Rs), imm(31));
     ashr64(reg(0), mem(Rt), reg(1));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //JR Rs
   case 0x08: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     call(&CPU::JR);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
   //JALR Rd,Rs
   case 0x09: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     call(&CPU::JALR);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::BRANCH);
     return 1;
   }
 
@@ -735,36 +979,46 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   //MFHI Rd
   case 0x10: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MOVE);
     mov64(mem(Rd), mem(Hi));
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //MTHI Rs
   case 0x11: {
+    PROF_BEGIN(Profiler::Name::MOVE);
     mov64(mem(Hi), mem(Rs));
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //MFLO Rd
   case 0x12: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MOVE);
     mov64(mem(Rd), mem(Lo));
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //MTLO Rs
   case 0x13: {
+    PROF_BEGIN(Profiler::Name::MOVE);
     mov64(mem(Lo), mem(Rs));
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //DSLLV Rd,Rt,Rs
   case 0x14: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     lea(reg(3), Rs);
     call(&CPU::DSLLV);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -776,153 +1030,205 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSRLV Rd,Rt,Rs
   case 0x16: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     lea(reg(3), Rs);
     call(&CPU::DSRLV);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSRAV Rd,Rt,Rs
   case 0x17: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     lea(reg(3), Rs);
     call(&CPU::DSRAV);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //MULT Rs,Rt
   case 0x18: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::MULT);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::MULT);
+    // PROF_END(Profiler::Name::MULT);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //MULTU Rs,Rt
   case 0x19: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::MULT);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::MULTU);
+    // PROF_END(Profiler::Name::MULT);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DIV Rs,Rt
   case 0x1a: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::DIV);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DIV);
+    // PROF_END(Profiler::Name::DIV);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DIVU Rs,Rt
   case 0x1b: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::DIV);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DIVU);
+    // PROF_END(Profiler::Name::DIV);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DMULT Rs,Rt
   case 0x1c: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::MULT);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DMULT);
+    // PROF_END(Profiler::Name::MULT);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DMULTU Rs,Rt
   case 0x1d: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::MULT);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DMULTU);
+    // PROF_END(Profiler::Name::MULT);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DDIV Rs,Rt
   case 0x1e: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::DIV);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DDIV);
+    // PROF_END(Profiler::Name::DIV);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DDIVU Rs,Rt
   case 0x1f: {
+    PROF_BEGIN(Profiler::Name::MATHS);
+    // PROF_BEGIN(Profiler::Name::DIV);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::DDIVU);
+    // PROF_END(Profiler::Name::DIV);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //ADD Rd,Rs,Rt
   case 0x20: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::ADD);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //ADDU Rd,Rs,Rt
   case 0x21: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     if(Rdn == 0) return 0;
     add32(reg(0), mem(Rs32), mem(Rt32));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SUB Rd,Rs,Rt
   case 0x22: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::SUB);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //SUBU Rd,Rs,Rt
   case 0x23: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     sub32(reg(0), mem(Rs32), mem(Rt32));
     mov64_s32(reg(0), reg(0));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //AND Rd,Rs,Rt
   case 0x24: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     and64(mem(Rd), mem(Rs), mem(Rt));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //OR Rd,Rs,Rt
   case 0x25: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     or64(mem(Rd), mem(Rs), mem(Rt));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //XOR Rd,Rs,Rt
   case 0x26: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     xor64(mem(Rd), mem(Rs), mem(Rt));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //NOR Rd,Rs,Rt
   case 0x27: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MATHS);
     or64(reg(0), mem(Rs), mem(Rt));
     xor64(reg(0), reg(0), imm(-1));
     mov64(mem(Rd), reg(0));
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -935,96 +1241,118 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
   //SLT Rd,Rs,Rt
   case 0x2a: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MOVE);
     cmp64(mem(Rs), mem(Rt), set_slt);
     mov64_f(mem(Rd), flag_slt);
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //SLTU Rd,Rs,Rt
   case 0x2b: {
     if(Rdn == 0) return 0;
+    PROF_BEGIN(Profiler::Name::MOVE);
     cmp64(mem(Rs), mem(Rt), set_ult);
     mov64_f(mem(Rd), flag_ult);
+    PROF_END(Profiler::Name::MOVE);
     return 0;
   }
 
   //DADD Rd,Rs,Rt
   case 0x2c: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::DADD);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DADDU Rd,Rs,Rt
   case 0x2d: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::DADDU);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSUB Rd,Rs,Rt
   case 0x2e: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::DSUB);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSUBU Rd,Rs,Rt
   case 0x2f: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rs);
     lea(reg(3), Rt);
     call(&CPU::DSUBU);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //TGE Rs,Rt
   case 0x30: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TGE);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TGEU Rs,Rt
   case 0x31: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TGEU);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TLT Rs,Rt
   case 0x32: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TLT);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TLTU Rs,Rt
   case 0x33: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TLTU);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TEQ Rs,Rt
   case 0x34: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TEQ);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
@@ -1036,9 +1364,11 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //TNE Rs,Rt
   case 0x36: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     lea(reg(2), Rt);
     call(&CPU::TNE);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
@@ -1050,11 +1380,13 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSLL Rd,Rt,Sa
   case 0x38: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa));
     call(&CPU::DSLL);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -1066,31 +1398,37 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSRL Rd,Rt,Sa
   case 0x3a: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa));
     call(&CPU::DSRL);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSRA Rd,Rt,Sa
   case 0x3b: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa));
     call(&CPU::DSRA);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSLL32 Rd,Rt,Sa
   case 0x3c: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa+32));
     call(&CPU::DSLL);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -1102,21 +1440,25 @@ auto CPU::Recompiler::emitSPECIAL(u32 instruction) -> bool {
 
   //DSRL32 Rd,Rt,Sa
   case 0x3e: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa+32));
     call(&CPU::DSRL);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
   //DSRA32 Rd,Rt,Sa
   case 0x3f: {
+    PROF_BEGIN(Profiler::Name::MATHS);
     lea(reg(1), Rd);
     lea(reg(2), Rt);
     mov32(reg(3), imm(Sa+32));
     call(&CPU::DSRA);
     emitZeroClear(Rdn);
+    PROF_END(Profiler::Name::MATHS);
     return 0;
   }
 
@@ -1130,33 +1472,41 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction) -> bool {
 
   //BLTZ Rs,i16
   case 0x00: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLTZ);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BGEZ Rs,i16
   case 0x01: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGEZ);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BLTZL Rs,i16
   case 0x02: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLTZL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BGEZL Rs,i16
   case 0x03: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGEZL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
@@ -1168,41 +1518,51 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction) -> bool {
 
   //TGEI Rs,i16
   case 0x08: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TGEI);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TGEIU Rs,i16
   case 0x09: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TGEIU);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TLTI Rs,i16
   case 0x0a: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TLTI);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TLTIU Rs,i16
   case 0x0b: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TLTIU);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
   //TEQI Rs,i16
   case 0x0c: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TEQI);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
@@ -1214,9 +1574,11 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction) -> bool {
 
   //TNEI Rs,i16
   case 0x0e: {
+    PROF_BEGIN(Profiler::Name::TRAP);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::TNEI);
+    PROF_END(Profiler::Name::TRAP);
     return 0;
   }
 
@@ -1228,33 +1590,41 @@ auto CPU::Recompiler::emitREGIMM(u32 instruction) -> bool {
 
   //BLTZAL Rs,i16
   case 0x10: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLTZAL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BGEZAL Rs,i16
   case 0x11: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGEZAL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BLTZALL Rs,i16
   case 0x12: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BLTZALL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
   //BGEZALL Rs,i16
   case 0x13: {
+    PROF_BEGIN(Profiler::Name::BRANCH);
     lea(reg(1), Rs);
     mov32(reg(2), imm(i16));
     call(&CPU::BGEZALL);
+    PROF_END(Profiler::Name::BRANCH);
     return 0;
   }
 
