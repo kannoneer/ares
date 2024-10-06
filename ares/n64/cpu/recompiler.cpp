@@ -12,7 +12,7 @@ auto CPU::Recompiler::pool(u32 address) -> Pool* {
 auto CPU::Recompiler::block(u64 vaddr, u32 address, bool singleInstruction) -> Block* {
   if(auto block = pool(address)->blocks[address >> 2 & 0x3f]) return block;
   auto block = emit(vaddr, address, singleInstruction);
-  pool(address)->blocks[address >> 2 & 0x3f] = block;
+  if (block) pool(address)->blocks[address >> 2 & 0x3f] = block;
   memory::jitprotect(true);
   return block;
 }
@@ -28,11 +28,13 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
     reset();
   }
 
+  bool abort = false;
   auto block = (Block*)allocator.acquire(sizeof(Block));
   beginFunction(3);
 
   Thread thread;
   bool hasBranched = 0;
+  int numInsn = 0;
   constexpr u32 branchToSelf = 0x1000'ffff;  //beq 0,0,<pc>
   u32 jumpToSelf = 2 << 26 | vaddr >> 2 & 0x3ff'ffff;  //j <pc>
   while(true) {
@@ -46,13 +48,25 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
       mov32(reg(2), imm(instruction));
       call(&CPU::instructionPrologue);
     }
+    if(numInsn == 0 || (vaddr&0x1f)==0){
+      if(!self.icache.coherent(vaddr, address)) {
+        abort = true;
+        break;
+      }
+      mov64(reg(1), imm(vaddr));
+      mov32(reg(2), imm(address));
+      call(&CPU::jitFetch);
+    }
+    numInsn++;
     bool branched = emitEXECUTE(instruction);
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
       //accelerate idle loops
       mov32(reg(1), imm(64 * 2));
       call(&CPU::step);
+    } else {
+      mov32(reg(1), imm(1 * 2));
+      call(&CPU::step);
     }
-    call(&CPU::instructionEpilogue<1>);
     test32(PipelineReg(state), imm(Pipeline::EndBlock), set_z);
     mov32(PipelineReg(state), PipelineReg(nstate));
     mov64(mem(IpuReg(pc)), PipelineReg(pc));
@@ -70,7 +84,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, bool singleInstruction) -> Bl
   block->code = endFunction();
 
 //print(hex(PC, 8L), " ", instructions, " ", size(), "\n");
-  return block;
+  return abort ? nullptr : block;
 }
 
 #define Sa  (instruction >>  6 & 31)

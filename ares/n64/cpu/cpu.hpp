@@ -114,6 +114,13 @@ struct CPU : Thread {
     struct Line;
     auto line(u64 vaddr) -> Line& { return lines[vaddr >> 5 & 0x1ff]; }
 
+    auto jitFetch(u64 vaddr, u32 paddr, CPU& cpu) -> void {
+      auto& line = this->line(vaddr);
+      if(!line.hit(paddr)) {
+        line.fill(paddr, cpu);
+      }
+    }
+
     //used by the recompiler to simulate instruction cache fetch timing
     auto step(u64 vaddr, u32 paddr) -> void {
       auto& line = this->line(vaddr);
@@ -133,6 +140,18 @@ struct CPU : Thread {
         line.fill(paddr, cpu);
       }
       return line.read(paddr);
+    }
+
+    auto coherent(u64 vaddr, u32 paddr) -> bool {
+      auto& line = this->line(vaddr);
+      if(!line.hit(paddr))
+        return true;
+      u32 ram[8];
+      self.busReadBurst<ICache>(paddr & ~0x0000'0fff | line.index, ram);
+      for (int i=0; i<8; i++)
+        if (ram[i] != line.words[i])
+          return false;
+      return true;
     }
 
     auto power(bool reset) -> void {
@@ -281,6 +300,10 @@ struct CPU : Thread {
   template<u32 Dir, u32 Size> auto devirtualize(u64 vaddr, bool raiseAlignedError = true, bool raiseExceptions = true) -> PhysAccess;
   alwaysinline auto devirtualizeFast(u64 vaddr) -> u64;
   auto devirtualizeDebug(u64 vaddr) -> u64;
+
+  auto jitFetch(u64 vaddr, u32 addr) -> void {
+    icache.jitFetch(vaddr, addr, *this);
+  }
 
   auto fetch(PhysAccess access) -> maybe<u32>;
   template<u32 Size> auto busWrite(u32 address, u64 data) -> void;
